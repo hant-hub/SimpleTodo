@@ -1,0 +1,7 @@
+/*
+!/.gitignore
+!/src
+!/include
+!build.c
+!sa.h
+!sbuild_st.h
