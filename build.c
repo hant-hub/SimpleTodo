@@ -54,7 +54,7 @@ int main(int argc, char* argv[]) {
     BegCompile(&g, TRUE, sstring("compile_commands.json"));
     
     //build app
-    Task* app = CompileCmd(&g, "build/app", Spread("src/main.c", "src/sqlite3.c", "build/cutils.a", "-Ilib/cutils/include", "-Iinclude/"));
+    Task* app = CompileCmd(&g, "build/app", Spread("src/main.c", "src/sqlite3.c", "src/core.c", "build/cutils.a", "-Ilib/cutils/include", "-Iinclude/"));
 
     app = EndCompile(&g, app);
     Exec(app, 4);
