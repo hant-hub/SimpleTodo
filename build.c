@@ -56,8 +56,45 @@ int main(int argc, char* argv[]) {
     //build app
     Task* app = CompileCmd(&g, "build/app", Spread("src/main.c", "src/sqlite3.c", "src/core.c", "build/cutils.a", "-Ilib/cutils/include", "-Iinclude/"));
 
-    app = EndCompile(&g, app);
-    Exec(app, 4);
+    Task* build_tests = AddDummyTask(&g);
+    ScratchArena sc = ScratchArenaGet(NULL);
 
+    //build tests
+    const SString test_dir = sstring("./test");
+    DirBegin(test_dir);
+    while (1) {
+        DirType type;
+        SString filename = DirNext(&type);
+        if (type == T_DIR) continue;
+        if (type == T_END) break;
+
+        const SString prefix = sstring("./build/tests/");
+        SString base = filepathbasename(filename);
+
+        SString src = {
+            .data = ArenaAllocZero(sc.arena, filename.len + test_dir.len + 2),
+            .len = filename.len + test_dir.len + 2
+        };
+        
+        SString output = {
+            .data = ArenaAllocZero(sc.arena, base.len + prefix.len + 1),
+            .len = base.len + prefix.len + 1
+        };
+
+        sformat(src, "%s/%s", test_dir, filename);
+        sformat(output, "%s%s", prefix, base);
+        printlog("Output: %n %n\n", output.data, src.data);
+
+        Task* t = CompileCmd(&g, (char*)output.data,
+                Spread((char*)src.data, "src/sqlite3.c", "src/core.c", "build/cutils.a", "-Ilib/cutils/include", "-Iinclude/"));
+
+        AddDep(build_tests, t);
+    }
+
+    Task* final = AddDummyTask(&g, build_tests, app);
+    final = EndCompile(&g, final);
+    Exec(final, 4);
+
+    ScratchArenaEnd(sc);
     FreeTaskGraph(&g);
 }

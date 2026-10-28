@@ -8,50 +8,50 @@ int main() {
 
     bool8 initialized = filestat(sstring("./database")).stats.size;
 
-    sqlite3* db = InitDataBase("./database");
+    TodoCtx ctx = InitDataBase();
 
-    u64 tag1_id = AddTag(db, sstring("test1"));
-    u64 tag2_id = AddTag(db, sstring("test2"));
-    u64 tag3_id = AddTag(db, sstring("test3"));
-    u64 tag4_id = AddTag(db, sstring("test4"));
+    u64 tag1_id = AddTag(&ctx, sstring("test1"));
+    u64 tag2_id = AddTag(&ctx, sstring("test2"));
+    u64 tag3_id = AddTag(&ctx, sstring("test3"));
+    u64 tag4_id = AddTag(&ctx, sstring("test4"));
 
-    u64 todo1_id = AddTodo(db, sstring("test1"), sstring("some random info"));
-    u64 todo2_id = AddTodo(db, sstring("test2"), sstring("some random info"));
-    u64 todo3_id = AddTodo(db, sstring("test3"), sstring("some random info"));
-    u64 todo4_id = AddTodo(db, sstring("test4"), sstring("some random info"));
-    AddTodo(db, sstring("test2"), sstring("some other random info"));
+    u64 todo1_id = AddTodo(&ctx, sstring("test1"), sstring("some random info"));
+    u64 todo2_id = AddTodo(&ctx, sstring("test2"), sstring("some random info"));
+    u64 todo3_id = AddTodo(&ctx, sstring("test3"), sstring("some random info"));
+    u64 todo4_id = AddTodo(&ctx, sstring("test4"), sstring("some random info"));
+    AddTodo(&ctx, sstring("test2"), sstring("some other random info"));
 
 
-    AddLink(db, todo1_id, tag1_id);
-    AddLink(db, todo2_id, tag1_id);
-    AddLink(db, todo2_id, tag2_id);
-    AddLink(db, todo1_id, tag3_id);
-    AddLink(db, todo1_id, tag4_id);
+    AddLink(&ctx, todo1_id, tag1_id);
+    AddLink(&ctx, todo2_id, tag1_id);
+    AddLink(&ctx, todo2_id, tag2_id);
+    AddLink(&ctx, todo1_id, tag3_id);
+    AddLink(&ctx, todo1_id, tag4_id);
 
     ScratchArena sc = ScratchArenaGet(NULL);
     Allocator scratch = ArenaGetAllocator(sc.arena);
 
-    Todo t = GetTodoID(db, scratch, todo1_id);
+    Todo t = GetTodoID(&ctx, scratch, todo1_id);
     printlog("Got Todo: %s, %s\n", t.name, t.body);
 
-    t = GetTodoName(db, scratch, sstring("test2"));
+    t = GetTodoName(&ctx, scratch, sstring("test2"));
     printlog("Got Todo: %s, %s\n", t.name, t.body);
 
-    Tag tag = GetTagID(db, scratch, tag1_id);
+    Tag tag = GetTagID(&ctx, scratch, tag1_id);
     printlog("Got Tag: %d %s\n", tag.id, tag.name);
 
-    tag = GetTagName(db, scratch, sstring("test1"));
+    tag = GetTagName(&ctx, scratch, sstring("test1"));
     printlog("Got Tag: %d %s\n", tag.id, tag.name);
 
-    bool8 linked = GetLink(db, todo1_id, tag1_id);
+    bool8 linked = GetLink(&ctx, todo1_id, tag1_id);
     printlog("Todo1 <-> Tag1: %n\n", linked ? "True" : "False");
 
-    linked = GetLink(db, todo3_id, tag1_id);
+    linked = GetLink(&ctx, todo3_id, tag1_id);
     printlog("Todo3 <-> Tag1: %n\n", linked ? "True" : "False");
 
     //iter
     {
-        TodoIter it = BeginTodoIter(db, todo1_id);
+        TodoIter it = BeginTodoIter(&ctx, todo1_id);
         Tag t;
         printlog("Testing Todo Iter (todo1):\n");
         while (NextTag(&it, scratch, &t) != ITER_DONE) {
@@ -61,7 +61,7 @@ int main() {
     }
 
     {
-        TagIter it = BeginTagIter(db, tag1_id);
+        TagIter it = BeginTagIter(&ctx, tag1_id);
         Todo t;
         printlog("Testing Tag Iter (tag1):\n");
         while (NextTodo(&it, scratch, &t) != ITER_DONE) {
@@ -70,20 +70,28 @@ int main() {
         EndTagIter(&it);
     }
 
+    {
+        TagIter it = SearchWithExpr(&ctx, sstring("(NOT :test1 AND NOT :test2)"), NULL);
+        Todo t;
+        printlog("Testing Parse Iter:\n");
+        while (NextTodo(&it, scratch, &t) != ITER_DONE) {
+            printlog("\tTodo: %d %s %s\n", t.id, t.name, t.body);
+        }
+        EndTagIter(&it);
+    }
 
-    //deletions
-    DeleteLinkID(db, todo1_id, tag1_id);
-    DeleteLinkTodo(db, todo1_id);
-    DeleteLinkTag(db, todo1_id);
+    char* err;
+    TagIter it = SearchWithExpr(&ctx, sstring("(NOT :test1 AND test)"), &err);
+    printlog("Error: %n\n", err);
 
-    DeleteTodoID(db, todo3_id);
-    DeleteTodoName(db, sstring("test4"));
-
-    DeleteTagID(db, tag3_id);
-    DeleteTagName(db, sstring("test4"));
-
-    printlog("Data: (%l, %l)\n", tag1_id, todo1_id);
-    printlog("Data: (%l, %l)\n", tag2_id, todo2_id);
+    Config c = GetConfig(scratch);
+    printlog("Config:\n");
+    printlog("\t db_loc: %s\n", c.db_loc);
+    printlog("\t default_tags: [");
+    for (u32 i = 0; i < c.default_tags.size; i++) {
+        printlog(" %s", c.default_tags.data[i]);
+    }
+    printlog(" ]\n");
 
     ScratchArenaEnd(sc);
     return 0;

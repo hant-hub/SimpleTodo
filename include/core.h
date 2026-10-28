@@ -2,6 +2,7 @@
 #define CORE_H
 
 #include <core/cutils.h>
+#include <ds/ds.h>
 #include <sqlite3.h>
 
 #define SQL_CALL(x) \
@@ -33,16 +34,29 @@ typedef struct TodoIter {
     sqlite3_stmt* query;
 } TodoIter;
 
-sqlite3* InitDataBase(const char* database_loc);
+typedef struct Config {
+    SString db_loc;
+    dynArray(SString) default_tags;
+} Config;
+
+typedef struct TodoCtx {
+    ArenaAllocator mem;
+    sqlite3* db;
+    Config c; 
+    dynArray(u64) tag_ids;
+} TodoCtx;
+
+TodoCtx InitDataBase();
+void ClearDataBase(TodoCtx* ctx);
 
 //Todo
 
-void DeleteTodoID(sqlite3* db, u64 t);
-void DeleteTodoName(sqlite3* db, SString name);
+void DeleteTodoID(TodoCtx* ctx, u64 t);
+void DeleteTodoName(TodoCtx* ctx, SString name);
 
-u64 AddTodo(sqlite3* db, SString name, SString body);
-Todo GetTodoID(sqlite3* db, Allocator a, u64 id);
-Todo GetTodoName(sqlite3* db, Allocator a, SString name);
+u64 AddTodo(TodoCtx* ctx, SString name, SString body);
+Todo GetTodoID(TodoCtx* ctx, Allocator a, u64 id);
+Todo GetTodoName(TodoCtx* ctx, Allocator a, SString name);
 
 typedef enum IterState {
     ITER_DONE,
@@ -50,21 +64,21 @@ typedef enum IterState {
     ITER_ERR,
 } IterState;
 
-TodoIter BeginTodoIter(sqlite3* db, u64 todo);
+TodoIter BeginTodoIter(TodoCtx* ctx, u64 todo);
 void ResetTodoIter(TodoIter* todo);
 IterState NextTag(TodoIter* iter, Allocator a, Tag* out);
 void EndTodoIter(TodoIter* iter);
 
 //Tag
 
-void DeleteTagID(sqlite3* db, u64 id);
-void DeleteTagName(sqlite3* db, SString name);
+void DeleteTagID(TodoCtx* ctx, u64 id);
+void DeleteTagName(TodoCtx* ctx, SString name);
 
-u64 AddTag(sqlite3* db, SString name);
-Tag GetTagID(sqlite3* db, Allocator a, u64 id);
-Tag GetTagName(sqlite3* db, Allocator a, SString name);
+u64 AddTag(TodoCtx* ctx, SString name);
+Tag GetTagID(TodoCtx* ctx, Allocator a, u64 id);
+Tag GetTagName(TodoCtx* ctx, Allocator a, SString name);
 
-TagIter BeginTagIter(sqlite3* db, u64 tag);
+TagIter BeginTagIter(TodoCtx* ctx, u64 tag);
 void ResetTagIter(TagIter* todo);
 IterState NextTodo(TagIter* iter, Allocator a, Todo* out);
 void EndTagIter(TagIter* iter);
@@ -72,12 +86,19 @@ void EndTagIter(TagIter* iter);
 
 //Link
 
-void DeleteLinkID(sqlite3* db, u64 todo, u64 tag);
-void DeleteLinkTodo(sqlite3* db, u64 todo);
-void DeleteLinkTag(sqlite3* db, u64 tag);
+void DeleteLinkID(TodoCtx* ctx, u64 todo, u64 tag);
+void DeleteLinkTodo(TodoCtx* ctx, u64 todo);
+void DeleteLinkTag(TodoCtx* ctx, u64 tag);
 
-void AddLink(sqlite3* db, u64 todo, u64 tag);
-bool8 GetLink(sqlite3* db, u64 todo, u64 tag);
+void AddLink(TodoCtx* ctx, u64 todo, u64 tag);
+bool8 GetLink(TodoCtx* ctx, u64 todo, u64 tag);
+
+
+//Search
+TagIter SearchWithExpr(TodoCtx* ctx, SString data, char** errmsg);
+
+
+Config GetConfig(Allocator a);
 
 
 #endif
