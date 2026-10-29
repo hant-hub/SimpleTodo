@@ -54,10 +54,15 @@ int main(int argc, char* argv[]) {
     BegCompile(&g, TRUE, sstring("compile_commands.json"));
     
     //build app
-    Task* app = CompileCmd(&g, "build/app", Spread("src/main.c", "src/sqlite3.c", "src/core.c", "build/cutils.a", "-Ilib/cutils/include", "-Iinclude/"));
+    Task* app = CompileCmd(&g, "build/app", Spread("src/main.c", "src/sqlite3.c", "src/core.c", "build/cutils.a",
+                "-Ilib/cutils/include", "-Iinclude/"));
 
     Task* build_tests = AddDummyTask(&g);
     ScratchArena sc = ScratchArenaGet(NULL);
+
+    //build stls
+    Task* stls = CompileCmd(&g, "build/stls", Spread("src/stls.c", "src/sqlite3.c", "src/core.c", "build/cutils.a",
+                                                    "-Ilib/cutils/include", "-Iinclude/"));
 
     //build tests
     const SString test_dir = sstring("./test");
@@ -86,12 +91,12 @@ int main(int argc, char* argv[]) {
         printlog("Output: %n %n\n", output.data, src.data);
 
         Task* t = CompileCmd(&g, (char*)output.data,
-                Spread((char*)src.data, "src/sqlite3.c", "src/core.c", "build/cutils.a", "-Ilib/cutils/include", "-Iinclude/"));
+                Spread((char*)src.data, "-g", "src/sqlite3.c",  "src/core.c", "build/cutils.a", "-Ilib/cutils/include", "-Iinclude/"));
 
         AddDep(build_tests, t);
     }
 
-    Task* final = AddDummyTask(&g, build_tests, app);
+    Task* final = AddDummyTask(&g, build_tests, app, stls);
     final = EndCompile(&g, final);
     Exec(final, 4);
 

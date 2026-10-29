@@ -8,7 +8,7 @@ int main() {
 
     bool8 initialized = filestat(sstring("./database")).stats.size;
 
-    TodoCtx ctx = InitDataBase();
+    TodoCtx ctx = InitDataBase((Config){0});
 
     u64 tag1_id = AddTag(&ctx, sstring("test1"));
     u64 tag2_id = AddTag(&ctx, sstring("test2"));

@@ -193,7 +193,7 @@ TagIter SearchWithExpr(TodoCtx* ctx, SString data, char** errmsg) {
     int r = setjmp(p.err.handler);
     if (r) {
         //handle error
-        u32 len = errormsgs[p.err.code].len + token_names[p.tok.token.t].len;
+        u32 len = errormsgs[p.err.code].len + token_names[p.tok.token.t].len + 2;
         char* msg = Alloc(GlobalAllocator, len);
         sformat((SString){len, (i8*)msg}, (char*)errormsgs[p.err.code].data, token_names[p.tok.token.t], p.tok.token.token);
 
@@ -370,7 +370,9 @@ static void InitializeTables(sqlite3* db) {
     }
 }
 
-TodoCtx InitDataBase() {
+#include "sys/stat.h"
+
+TodoCtx InitDataBase(Config overrides) {
     TodoCtx out = { };
     char* err;
 
@@ -378,14 +380,25 @@ TodoCtx InitDataBase() {
     out.tag_ids.a = ArenaGetAllocator(out.mem);
 
     Config c = GetConfig(ArenaGetAllocator(out.mem));
+    printlog("Db_loc: %s\n", c.db_loc);
+    if (overrides.db_loc.data) {
+        c.db_loc = overrides.db_loc;
+    }
 
+    if (overrides.default_tags.size) {
+        dynExt(c.default_tags, overrides.default_tags.data, overrides.default_tags.size);
+    }
+
+    //mkdir
+    assert(!mkdirRec(filepathpopdir(c.db_loc)));
     assert(!sqlite3_open((char*)c.db_loc.data, &out.db));
     InitializeTables(out.db);
-
+    
     for (u32 i = 0; i < c.default_tags.size; i++) {
         u64 id = AddTag(&out, c.default_tags.data[i]);
         dynPush(out.tag_ids, id);
     }
+    out.c = c;
 
     return out;
 }
@@ -396,6 +409,10 @@ void ClearDataBase(TodoCtx* ctx) {
     sqlite3_db_config(ctx->db, SQLITE_DBCONFIG_RESET_DATABASE, 0, 0);
 
     InitializeTables(ctx->db); //reinitialize tables
+
+    for (u32 i = 0; i < ctx->c.default_tags.size; i++) {
+        u64 id = AddTag(ctx, ctx->c.default_tags.data[i]);
+    }
 }
 
 void DeleteTodoID(TodoCtx* ctx, u64 t) {
@@ -953,14 +970,15 @@ Config GetConfig(Allocator a) {
     //save current dir
     
     char buffer[PATH_MAX + 1] = {0};
-    getcwd(buffer, PATH_MAX);
-    printlog("%n\n", buffer);
+    char* r = getcwd(buffer, PATH_MAX);
+    if (!r) panic();
+    //printlog("%n\n", buffer);
 
     //test walk up directories    
     
     u32 max_depth = 5;
     while (max_depth) {
-        file f = filestat(sstring("simpletodo.conf"));
+        file f = filestat(sstring(".todo.conf"));
         if (f.stats.size) {
             break;
         }
@@ -968,14 +986,14 @@ Config GetConfig(Allocator a) {
         max_depth--;
     }
 
-    Config out = { .db_loc = sstring("~/.local/simpletodo/database"), .default_tags.a = a };
+    Config out = { .db_loc = sstring("~/.local/state/simpletodo/database"), .default_tags.a = a };
     if (!max_depth) {
         //default config
         return out;
     }
 
     //read configuration
-    file config_file = fileopen(sstring("simpletodo.conf"), FILE_READ);
+    file config_file = fileopen(sstring(".todo.conf"), FILE_READ);
 
     ScratchArena sc = ScratchArenaGet(NULL);
     SString config_data = {
@@ -987,7 +1005,7 @@ Config GetConfig(Allocator a) {
     fileclose(config_file);
 
     //db_loc = 
-    printlog("Loaded Config:\n%s\n", config_data);
+    //printlog("Loaded Config:\n%s\n", config_data);
     
     i8* cur = (i8*)config_data.data;
 
@@ -1010,15 +1028,15 @@ Config GetConfig(Allocator a) {
 
         cur++; //skip \n
 
-        printlog("\t%s %s\n", key, val);
+        //printlog("\t%s %s\n", key, val);
 
         if (Sstrcmp(key, sstring("db_loc"))) {
             //manually to add null terminator
-            out.db_loc.data = Alloc(a, key.len + 1); 
-            out.db_loc.len = key.len;
+            out.db_loc.data = Alloc(a, val.len + 1); 
+            out.db_loc.len = val.len;
 
-            memset(out.db_loc.data, 0, key.len + 1);
-            memcpy(out.db_loc.data, key.data, key.len); 
+            memset(out.db_loc.data, 0, val.len + 1);
+            memcpy(out.db_loc.data, val.data, val.len); 
             continue;
         }
 

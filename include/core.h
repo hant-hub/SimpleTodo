@@ -14,7 +14,6 @@
             } \
         } while (0)
 
-//IMPORTANT(ELI): name and body must be freed
 typedef struct Todo {
     u64 id;
     SString name;
@@ -46,11 +45,10 @@ typedef struct TodoCtx {
     dynArray(u64) tag_ids;
 } TodoCtx;
 
-TodoCtx InitDataBase();
+TodoCtx InitDataBase(Config overrides);
 void ClearDataBase(TodoCtx* ctx);
 
 //Todo
-
 void DeleteTodoID(TodoCtx* ctx, u64 t);
 void DeleteTodoName(TodoCtx* ctx, SString name);
 
@@ -85,7 +83,6 @@ void EndTagIter(TagIter* iter);
 
 
 //Link
-
 void DeleteLinkID(TodoCtx* ctx, u64 todo, u64 tag);
 void DeleteLinkTodo(TodoCtx* ctx, u64 todo);
 void DeleteLinkTag(TodoCtx* ctx, u64 tag);
@@ -98,6 +95,7 @@ bool8 GetLink(TodoCtx* ctx, u64 todo, u64 tag);
 TagIter SearchWithExpr(TodoCtx* ctx, SString data, char** errmsg);
 
 
+//config
 Config GetConfig(Allocator a);
 
 
