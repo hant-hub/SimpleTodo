@@ -1,9 +1,9 @@
 #include <core.h>
 
-
 typedef enum TokenType {
     TOKEN_INVALID = 0, //uninitialized tokens are invalid
     TOKEN_ID,
+    TOKEN_ANY,
     TOKEN_NUM,
     TOKEN_TAG,
     TOKEN_AND,
@@ -20,6 +20,7 @@ const SString token_names[] = {
     [TOKEN_TAG]     = sstring("TAG"),
     [TOKEN_AND]     = sstring("AND"),
     [TOKEN_NOT]     = sstring("NOT"),
+    [TOKEN_ANY]     = sstring("ANY"),
     [TOKEN_OR]      = sstring("OR"),
     [TOKEN_OPAREN]  = sstring("OPAREN"),
     [TOKEN_CPAREN]  = sstring("CPAREN"),
@@ -58,6 +59,7 @@ bool8 PopChar(ExprTokenizer* tok) {
 //
 // UNARY := NOT UNARY
 //        | TAG
+//        | ANY
 //        | ID
 //        | '(' EXPR ')'
 //
@@ -96,6 +98,11 @@ static void NextToken(ExprTokenizer* t) {
 
         if (Sstrcmp(data, sstring("NOT"))) {
             t->token = (Token){TOKEN_NOT};
+            return;
+        }
+
+        if (Sstrcmp(data, sstring("ANY"))) {
+            t->token = (Token){TOKEN_ANY};
             return;
         }
 
@@ -172,7 +179,7 @@ typedef struct ParsingData {
 
 const SString errormsgs[] = {
     [ERROR_NO_ERROR]            = sstring("No Error: Should never happen"),
-    [ERROR_INVALID_UNARY]       = sstring("Invalid Unary: Expected TAG, NOT, or '(' Got %s"),
+    [ERROR_INVALID_UNARY]       = sstring("Invalid Unary: Expected TAG, NOT, ANY, or '(' Got %s"),
     [ERROR_INVALID_ID]          = sstring("Invalid %s: Got '%s'"),
     [ERROR_UNEXPECTED_TOKEN]    = sstring("Unexpected Token: Got %s"),
 };
@@ -264,6 +271,17 @@ static void ParseUnary(ParsingData* p, bool8 negated) {
         return;
     }
 
+    if (p->tok.token.t == TOKEN_ANY) {
+
+        if (negated) {
+            dynExt(p->query, "false", 5);
+        } else {
+            dynExt(p->query, "true", 4);
+        }
+        NextToken(&p->tok);
+        return;
+    }
+
     if (p->tok.token.t == TOKEN_ID) {
         p->err.code = ERROR_INVALID_ID;
         p->err.index = p->tok.curr;
@@ -330,7 +348,8 @@ static void InitializeTables(sqlite3* db) {
             "("
             "id INTEGER PRIMARY KEY AUTOINCREMENT,"
             "name STRING UNIQUE,"
-            "body STRING"
+            "body STRING,"
+            "priority FLOAT"
             ")",
             NULL, NULL, &err);
 
@@ -370,7 +389,6 @@ static void InitializeTables(sqlite3* db) {
     }
 }
 
-#include "sys/stat.h"
 
 TodoCtx InitDataBase(Config overrides) {
     TodoCtx out = { };
@@ -465,17 +483,18 @@ void DeleteTodoName(TodoCtx* ctx, SString name) {
 
 }
 
-u64 AddTodo(TodoCtx* ctx, SString name, SString body) {
+u64 AddTodo(TodoCtx* ctx, SString name, SString body, f32 priority) {
     static sqlite3_stmt* statement = NULL;
 
     if (!statement) {
-        SQL_CALL(sqlite3_prepare_v2(ctx->db, "INSERT INTO todos(id, name, body) VALUES(NULL, ?, ?) ON CONFLICT(name) DO UPDATE SET body = excluded.body RETURNING id", -1, &statement, NULL));
+        SQL_CALL(sqlite3_prepare_v2(ctx->db, "INSERT INTO todos(id, name, body, priority) VALUES(NULL, ?, ?, ?) ON CONFLICT(name) DO UPDATE SET body = excluded.body, priority = excluded.priority RETURNING id", -1, &statement, NULL));
     } else {
         sqlite3_reset(statement);
     }
 
     SQL_CALL(sqlite3_bind_text(statement, 1, (char*)name.data, name.len, SQLITE_TRANSIENT));
     SQL_CALL(sqlite3_bind_text(statement, 2, (char*)body.data, body.len, SQLITE_TRANSIENT));
+    SQL_CALL(sqlite3_bind_double(statement, 3, priority));
 
     int rc;
     i64 id;
@@ -507,7 +526,7 @@ Todo GetTodoID(TodoCtx* ctx, Allocator a, u64 id) {
 
     if (!statement) {
         //we already know the id
-        SQL_CALL(sqlite3_prepare_v2(ctx->db, "SELECT name, body FROM todos WHERE rowid = ?" , -1, &statement, NULL));
+        SQL_CALL(sqlite3_prepare_v2(ctx->db, "SELECT name, body, priority FROM todos WHERE rowid = ?" , -1, &statement, NULL));
     } else {
         sqlite3_reset(statement);
     }
@@ -529,6 +548,9 @@ Todo GetTodoID(TodoCtx* ctx, Allocator a, u64 id) {
                 u32 size = sqlite3_column_bytes(statement, 1);
                 res.body = Sstrdup(a, (SString){.data = (i8*)data, .len = size});
             }
+            {
+                res.priority = sqlite3_column_double(statement, 2);
+            }
             continue;
         }
         if (rc == SQLITE_DONE) {
@@ -547,7 +569,7 @@ Todo GetTodoName(TodoCtx* ctx, Allocator a, SString name) {
 
     if (!statement) {
         //we already know the id
-        SQL_CALL(sqlite3_prepare_v2(ctx->db, "SELECT id, body FROM todos WHERE name = ?" , -1, &statement, NULL));
+        SQL_CALL(sqlite3_prepare_v2(ctx->db, "SELECT id, body, priority FROM todos WHERE name = ?" , -1, &statement, NULL));
     } else {
         sqlite3_reset(statement);
     }
@@ -567,6 +589,9 @@ Todo GetTodoName(TodoCtx* ctx, Allocator a, SString name) {
                 u32 size = sqlite3_column_bytes(statement, 1);
                 res.body = Sstrdup(a, (SString){.data = (i8*)data, .len = size});
             }
+            {
+                res.priority = sqlite3_column_double(statement, 2);
+            }
             continue;
         }
         if (rc == SQLITE_DONE) {
@@ -580,6 +605,154 @@ Todo GetTodoName(TodoCtx* ctx, Allocator a, SString name) {
     panic();
 }
 
+SString StringifyTodo(TodoCtx* ctx, Todo* t, ArenaAllocator a) {
+    char* buffer = ArenaAllocZero(a, 0);
+    u32 curr = 0;
+
+    //title
+    ArenaExtendLast(a, 2);
+    buffer[curr++] = '#';
+    buffer[curr++] = ' ';
+
+    ArenaExtendLast(a, t->name.len + 1);
+    for (u32 i = 0; i < t->name.len; i++) {
+        buffer[curr++] = t->name.data[i];
+    }
+    buffer[curr++] = '\n';
+
+    //priority
+
+    ArenaExtendLast(a, 15);
+    curr += sformat((SString){.data = (i8*)&buffer[curr], .len = 14}, "%f", t->priority);
+    buffer[curr++] = '\n';
+
+    //tags
+    TodoIter it = BeginTodoIter(ctx, t->id);
+    
+    while (1) {
+        ScratchArena sc = ScratchArenaGet(a);
+        Tag tag;
+        IterState s = NextTag(&it, ArenaGetAllocator(sc.arena), &tag);
+        if (s == ITER_DONE || s == ITER_ERR) {
+            ScratchArenaEnd(sc);
+            break;
+        }
+
+        ArenaExtendLast(a, tag.name.len + 2);
+        buffer[curr++] = ':';
+        for (u32 i = 0; i < tag.name.len; i++) {
+            buffer[curr++] = tag.name.data[i];
+        }
+        buffer[curr++] = ' ';
+
+        ScratchArenaEnd(sc);
+    }
+
+    ArenaExtendLast(a, 2);
+    buffer[curr++] = '\n';
+    buffer[curr++] = '\n';
+
+    ArenaExtendLast(a, t->body.len);
+    for (u32 i = 0; i < t->body.len; i++) {
+        buffer[curr++] = t->body.data[i];
+    }
+
+    return (SString){curr, (i8*)buffer};
+}
+
+#define Advance(c, lim) \
+    do { \
+        c++; \
+        if (c >= lim) { \
+            *err = "Unexpected End of Data"; \
+            return (Todo){0}; \
+        } \
+    } while(0)
+
+//this function sanitizes user input so it must be checked
+Todo DeStringifyTodo(TodoCtx* ctx, SString data, Allocator a, char** err) {
+    char* tmp;
+    if (err == NULL) {
+        err = &tmp; //avoid branching logic and handle null error
+    }
+
+    if (data.len < 3) {
+        *err = "Name must be preceeded by '# ' for valid markdown";
+        return (Todo){0};
+    }
+
+    //get name 
+    u32 curr = 2;
+    SString name = {
+        .data = &data.data[2]
+    };
+
+    while (data.data[curr] != '\n' && curr < data.len) {
+        name.len++;
+        curr++;
+    }
+    if (name.len == 0) {
+        *err = "Name Cannot Be Empty";
+        return (Todo){0};
+    }
+
+    //this clears the tags so that we can remove tags
+    DeleteTodoName(ctx, name);
+    u64 todo_id = AddTodo(ctx, name, sstring(""), 0);
+
+    if (curr >= data.len) {
+        return GetTodoID(ctx, a, todo_id);
+    }
+
+    Advance(curr, data.len);
+    
+    //priority
+    
+    f32 priority;
+    Strtofloat((SString){.data = &data.data[curr], .len = data.len - curr}, &priority);
+    while (data.data[curr] != '\n') Advance(curr, data.len);
+    if (curr > data.len) {
+        u64 todo_id = AddTodo(ctx, name, sstring(""), priority);
+        return GetTodoID(ctx, a, todo_id);
+    }
+    Advance(curr, data.len);
+
+    SString curr_tag = {0};
+    while (1) {
+        if (data.data[curr] == ' ' || data.data[curr] == '\n') {
+            if (curr_tag.data) {
+                curr_tag.len = &data.data[curr] - curr_tag.data;
+
+                u64 tag_id = AddTag(ctx, curr_tag);
+                AddLink(ctx, todo_id, tag_id);
+            }
+
+            curr_tag.data = NULL;
+            if (data.data[curr] == '\n') break;
+        }
+
+        if (data.data[curr] == ':') {
+            curr_tag.data = &data.data[curr + 1];
+
+        }
+
+        Advance(curr, data.len); 
+    }
+
+    //expecting newlines
+    while (curr <= data.len && data.data[curr] == '\n') curr++; 
+    if (curr > data.len) {
+        //empty body
+        return GetTodoID(ctx, a, todo_id);
+    }
+
+    SString body = { .data = &data.data[curr] };
+    while (curr < data.len) body.len++, curr++;
+
+    *err = NULL;
+    AddTodo(ctx, name, body, priority);
+    return GetTodoID(ctx, a, todo_id);
+}
 
 TodoIter BeginTodoIter(TodoCtx* ctx, u64 todo) {
     sqlite3_stmt* statement = NULL;
@@ -589,7 +762,8 @@ TodoIter BeginTodoIter(TodoCtx* ctx, u64 todo) {
                 "SELECT id, name FROM "
                 "todo_tags JOIN tags ON "
                 "todo_tags.tag = tags.id "
-                "WHERE todo_tags.todo = ?",
+                "WHERE todo_tags.todo = ? "
+                "GROUP BY tags.id",
                 -1, &statement, NULL));
 
     SQL_CALL(sqlite3_bind_int64(statement, 1, todo));
@@ -781,10 +955,11 @@ TagIter BeginTagIter(TodoCtx* ctx, u64 tag) {
 
     //we already know the id
     SQL_CALL(sqlite3_prepare_v2(ctx->db, 
-                "SELECT id, name, body FROM "
+                "SELECT id, name, body, priority FROM "
                 "todo_tags JOIN todos ON "
                 "todo_tags.todo = todos.id "
-                "WHERE todo_tags.tag = ?",
+                "WHERE todo_tags.tag = ? "
+                "ORDER BY priority DESC",
                 -1, &statement, NULL));
 
     SQL_CALL(sqlite3_bind_int64(statement, 1, tag));
@@ -818,6 +993,7 @@ IterState NextTodo(TagIter* iter, Allocator a, Todo* out) {
             };
 
             out->body = Sstrdup(a, data);
+            out->priority = sqlite3_column_double(iter->query, 3);
 
             return ITER_PENDING;
         }

@@ -16,6 +16,7 @@
 
 typedef struct Todo {
     u64 id;
+    f32 priority;
     SString name;
     SString body;
 } Todo;
@@ -52,9 +53,17 @@ void ClearDataBase(TodoCtx* ctx);
 void DeleteTodoID(TodoCtx* ctx, u64 t);
 void DeleteTodoName(TodoCtx* ctx, SString name);
 
-u64 AddTodo(TodoCtx* ctx, SString name, SString body);
+u64 AddTodo(TodoCtx* ctx, SString name, SString body, f32 priority);
 Todo GetTodoID(TodoCtx* ctx, Allocator a, u64 id);
 Todo GetTodoName(TodoCtx* ctx, Allocator a, SString name);
+
+//used for converting todos into human readable formats
+SString StringifyTodo(TodoCtx* ctx, Todo* t, ArenaAllocator a); //should always succeed
+                                                                //We can assume this since we sanitize
+                                                                //the input before we input it into
+                                                                //the database
+
+Todo DeStringifyTodo(TodoCtx* ctx, SString data, Allocator a, char** err);
 
 typedef enum IterState {
     ITER_DONE,
@@ -92,7 +101,12 @@ bool8 GetLink(TodoCtx* ctx, u64 todo, u64 tag);
 
 
 //Search
+
+//Note(ELI): This function avoid needing to sanitize the user input by
+//parsing it. Invalid input which would result in SQL injection results
+//in an ERROR
 TagIter SearchWithExpr(TodoCtx* ctx, SString data, char** errmsg);
+
 
 
 //config

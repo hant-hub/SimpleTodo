@@ -15,11 +15,11 @@ int main() {
     u64 tag3_id = AddTag(&ctx, sstring("test3"));
     u64 tag4_id = AddTag(&ctx, sstring("test4"));
 
-    u64 todo1_id = AddTodo(&ctx, sstring("test1"), sstring("some random info"));
-    u64 todo2_id = AddTodo(&ctx, sstring("test2"), sstring("some random info"));
-    u64 todo3_id = AddTodo(&ctx, sstring("test3"), sstring("some random info"));
-    u64 todo4_id = AddTodo(&ctx, sstring("test4"), sstring("some random info"));
-    AddTodo(&ctx, sstring("test2"), sstring("some other random info"));
+    u64 todo1_id = AddTodo(&ctx, sstring("test1"), sstring("some random info"), 0);
+    u64 todo2_id = AddTodo(&ctx, sstring("test2"), sstring("some random info"), 0);
+    u64 todo3_id = AddTodo(&ctx, sstring("test3"), sstring("some random info"), 0);
+    u64 todo4_id = AddTodo(&ctx, sstring("test4"), sstring("some random info"), 0);
+    AddTodo(&ctx, sstring("test2"), sstring("some other random info"), 0);
 
 
     AddLink(&ctx, todo1_id, tag1_id);
@@ -92,6 +92,21 @@ int main() {
         printlog(" %s", c.default_tags.data[i]);
     }
     printlog(" ]\n");
+
+    //stringification
+
+    Todo todo = GetTodoID(&ctx, scratch, todo1_id);
+    SString str = StringifyTodo(&ctx, &todo, sc.arena);
+    printlog("Str:\n%s\n", str);
+
+
+    Todo todo2 = DeStringifyTodo(&ctx, str, scratch, NULL);
+
+    assert(Sstrcmp(todo.name, todo2.name));
+    assert(Sstrcmp(todo.body, todo2.body));
+
+    Todo todo3 = DeStringifyTodo(&ctx, sstring("# a"), scratch, &err);
+    printlog("Error: %n\n", err);
 
     ScratchArenaEnd(sc);
     return 0;

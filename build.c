@@ -64,6 +64,9 @@ int main(int argc, char* argv[]) {
     Task* stls = CompileCmd(&g, "build/stls", Spread("src/stls.c", "src/sqlite3.c", "src/core.c", "build/cutils.a",
                                                     "-Ilib/cutils/include", "-Iinclude/"));
 
+    Task* stedit = CompileCmd(&g, "build/stedit", Spread("src/stedit.c", "src/sqlite3.c", "src/core.c", "build/cutils.a",
+                                                    "-Ilib/cutils/include", "-Iinclude/"));
+
     //build tests
     const SString test_dir = sstring("./test");
     DirBegin(test_dir);
@@ -96,7 +99,7 @@ int main(int argc, char* argv[]) {
         AddDep(build_tests, t);
     }
 
-    Task* final = AddDummyTask(&g, build_tests, app, stls);
+    Task* final = AddDummyTask(&g, build_tests, app, stls, stedit);
     final = EndCompile(&g, final);
     Exec(final, 4);
 
