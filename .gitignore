@@ -1,6 +1,7 @@
 /*
 !/.gitignore
 !/src
+!/test
 !/include
 !build.c
 !sa.h

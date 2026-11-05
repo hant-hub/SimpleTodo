@@ -349,7 +349,8 @@ static void InitializeTables(sqlite3* db) {
             "id INTEGER PRIMARY KEY AUTOINCREMENT,"
             "name STRING UNIQUE,"
             "body STRING,"
-            "priority FLOAT"
+            "priority FLOAT, "
+            "completion INTEGER CHECK( completion <= 100 )"
             ")",
             NULL, NULL, &err);
 
