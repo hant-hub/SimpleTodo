@@ -26,7 +26,7 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    TodoCtx ctx = InitDataBase((Config){0});
+    TodoCtx ctx = InitDataBase(sstring(""));
     SAvals vals = s.vals;
 
     char* err;

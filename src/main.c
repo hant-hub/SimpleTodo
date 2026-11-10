@@ -8,7 +8,7 @@ int main() {
 
     bool8 initialized = filestat(sstring("./database")).stats.size;
 
-    TodoCtx ctx = InitDataBase((Config){0});
+    TodoCtx ctx = InitDataBase(sstring("db_loc: ./database"));
 
     u64 tag1_id = AddTag(&ctx, sstring("test1"));
     u64 tag2_id = AddTag(&ctx, sstring("test2"));
@@ -83,15 +83,6 @@ int main() {
     char* err = NULL;
     TagIter it = SearchWithExpr(&ctx, sstring("(NOT :test1 AND test)"), &err);
     printlog("Error: %n\n", err ? err : "No Error");
-
-    Config c = GetConfig(scratch);
-    printlog("Config:\n");
-    printlog("\t db_loc: %s\n", c.db_loc);
-    printlog("\t default_tags: [");
-    for (u32 i = 0; i < c.default_tags.size; i++) {
-        printlog(" %s", c.default_tags.data[i]);
-    }
-    printlog(" ]\n");
 
     //stringification
 

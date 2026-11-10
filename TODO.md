@@ -2,9 +2,6 @@
 TODOs:
 - [ ] Goal Get rid of this file
 
-- [ ] Minor database improvments
-    - [ ] Name Index?
-
 - [ ] Bulk Edit
     - [ ] Bulk Delete
 
@@ -14,11 +11,19 @@ TODOs:
     - [ ] query tags
     - [ ] Limit + Offset
 
-- [ ] Update Build tool to produce Static Lib
-    - [ ] Tests + application should use static lib
 - [ ] Add Conditional Build
     - [ ] Only rebuild tests if src is newer than dst
 
+
+- [X] Config Improvement
+    - [X] Arbitary fields
+    - [X] Multimap style values 
+    - [X] 'overlay' logic
+    - [X] core logic integration
+- [X] Update Build tool to produce Static Lib
+    - [X] Tests + application should use static lib
+- [X] Minor database improvments
+    - [X] Name Index?
 - [X] Update search to support searching by name
     - [X] fuzzy name search
 - [X] Update SearchWithExpr to Handle Priority and Completion

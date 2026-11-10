@@ -1,5 +1,7 @@
 #include <core.h>
 
+DefStringMapImpl(ConfigMap, ConfigVal);
+
 #ifdef DEBUG
 #define INTERNAL_ONLY
 #else
@@ -530,36 +532,59 @@ static void InitializeTables(sqlite3* db) {
         printerr("SQLITE Error: %n\n", err);
         panic();
     }
+
+    rc = sqlite3_exec(db, 
+            "CREATE UNIQUE INDEX IF NOT EXISTS "
+            "todo_ids ON todos(id);",
+            NULL, NULL, &err);
+
+    if (rc) {
+        printerr("SQLITE Error: %n\n", err);
+        panic();
+    }
+
+    rc = sqlite3_exec(db, 
+            "CREATE UNIQUE INDEX IF NOT EXISTS "
+            "tag_ids ON tags(id);",
+            NULL, NULL, &err);
+
+    if (rc) {
+        printerr("SQLITE Error: %n\n", err);
+        panic();
+    }
 }
 
+SString default_config = sstring("db_loc: ~/.local/share/simpletodo/database");
 
-TodoCtx InitDataBase(Config overrides) {
+TodoCtx InitDataBase(SString overrides) {
     TodoCtx out = { };
     char* err;
 
     out.mem = ArenaCreate(GlobalAllocator, KB(10));
     out.tag_ids.a = ArenaGetAllocator(out.mem);
 
-    Config c = GetConfig(ArenaGetAllocator(out.mem));
-    printlog("Db_loc: %s\n", c.db_loc);
-    if (overrides.db_loc.data) {
-        c.db_loc = overrides.db_loc;
-    }
+    ConfigMap config = { .a = GlobalAllocator };
+    ParseConfig(&config, default_config);
+    ParseConfig(&config, overrides);
+    GetConfig(&config);
 
-    if (overrides.default_tags.size) {
-        dynExt(c.default_tags, overrides.default_tags.data, overrides.default_tags.size);
-    }
+    //printlog("Db_loc: %s\n", dynBack((ConfigMapGet(&config, sstring("db_loc"))->vals)));
+
+    out.db_loc = dynBack((ConfigMapGet(&config, sstring("db_loc"))->vals));
 
     //mkdir
-    assert(!mkdirRec(filepathpopdir(c.db_loc)));
-    assert(!sqlite3_open((char*)c.db_loc.data, &out.db));
+    assert(!mkdirRec(filepathpopdir(out.db_loc)));
+    assert(!sqlite3_open((char*)out.db_loc.data, &out.db));
     InitializeTables(out.db);
     
-    for (u32 i = 0; i < c.default_tags.size; i++) {
-        u64 id = AddTag(&out, c.default_tags.data[i]);
-        dynPush(out.tag_ids, id);
+    ConfigVal* v = ConfigMapGet(&config, sstring("addkey")); 
+    if (v) {
+        for (u32 i = 0; i < v->vals.size; i++) {
+            u64 id = AddTag(&out, v->vals.data[i]);
+            dynPush(out.tag_ids, id);
+        }
     }
-    out.c = c;
+    out.config = config;
 
     return out;
 }
@@ -571,8 +596,8 @@ void ClearDataBase(TodoCtx* ctx) {
 
     InitializeTables(ctx->db); //reinitialize tables
 
-    for (u32 i = 0; i < ctx->c.default_tags.size; i++) {
-        u64 id = AddTag(ctx, ctx->c.default_tags.data[i]);
+    for (u32 i = 0; i < ctx->default_tags.size; i++) {
+        u64 id = AddTag(ctx, ctx->default_tags.data[i]);
     }
 }
 
@@ -1332,91 +1357,86 @@ bool8 GetLink(TodoCtx* ctx, u64 todo, u64 tag) {
 #include "limits.h"
 #include "unistd.h"
 
-Config GetConfig(Allocator a) {
+void GetConfig(ConfigMap* out) {
     //save current dir
     
     char buffer[PATH_MAX + 1] = {0};
     char* r = getcwd(buffer, PATH_MAX);
     if (!r) panic();
-    //printlog("%n\n", buffer);
 
     //test walk up directories    
-    
     u32 max_depth = 5;
     while (max_depth) {
         file f = filestat(sstring(".todo.conf"));
         if (f.stats.size) {
-            break;
+            ScratchArena sc = ScratchArenaGet(NULL);
+            SString config = {
+                .data = ArenaAllocZero(sc.arena, f.stats.size),
+                .len = f.stats.size
+            };
+            fileload(config, sstring(".todo.conf"));
+            //printlog("Found Config\n");
+            //printlog("%s\n", config);
+            ParseConfig(out, config) ;
+
+            ScratchArenaEnd(sc);
         }
         setdir(sstring("..")); //walk up directory
         max_depth--;
     }
 
-    Config out = { .db_loc = sstring("~/.local/state/simpletodo/database"), .default_tags.a = a };
-    if (!max_depth) {
-        //default config
-        return out;
-    }
 
-    //read configuration
-    file config_file = fileopen(sstring(".todo.conf"), FILE_READ);
-
-    ScratchArena sc = ScratchArenaGet(NULL);
-    SString config_data = {
-        .data = ArenaAlloc(sc.arena, config_file.stats.size),
-        .len = config_file.stats.size,
-    };
-
-    fileread(config_data, config_file);
-    fileclose(config_file);
-
-    //db_loc = 
-    //printlog("Loaded Config:\n%s\n", config_data);
-    
-    i8* cur = (i8*)config_data.data;
-
-    while (1) {
-        SString key = { .data = cur, };
-        //get key
-        while ((cur - config_data.data <= config_data.len) && *cur != ' ') key.len++, cur++;        
-        if (cur - config_data.data > config_data.len) {
-            break;
-        }
-
-        cur++; //skip ' '
-        
-        //get val
-        SString val = { .data = cur };
-        while ((cur - config_data.data <= config_data.len) && *cur != '\n') val.len++, cur++;        
-        if (cur - config_data.data > config_data.len) {
-            break;
-        }
-
-        cur++; //skip \n
-
-        //printlog("\t%s %s\n", key, val);
-
-        if (Sstrcmp(key, sstring("db_loc"))) {
-            //manually to add null terminator
-            out.db_loc.data = Alloc(a, val.len + 1); 
-            out.db_loc.len = val.len;
-
-            memset(out.db_loc.data, 0, val.len + 1);
-            memcpy(out.db_loc.data, val.data, val.len); 
-            continue;
-        }
-
-        if (Sstrcmp(key, sstring("addkey"))) {
-            SString d = Sstrdup(a, val);
-            dynPush(out.default_tags, d);
-            continue;
-        }
-    }
-
-    ScratchArenaEnd(sc);
     setdir((SString){.len = strlen(buffer), .data = (i8*)buffer});
-    return out;
 }
 
+void ParseConfig(ConfigMap* m, SString config) {
+    u32 curr = 0;
+    SString key = {.data = config.data};
+    SString val = {};
 
+    //FALSE => key
+    //TRUE => val
+    bool8 parse_state = TRUE;
 
+    while (curr < config.len) {
+        i8 c = config.data[curr];
+        if (parse_state) {
+            if (c == ':') {
+                parse_state = FALSE;
+                curr += 2; //skip ': '
+                val.data = &config.data[curr];
+                val.len = 0;
+                continue;
+            }
+            key.len++;
+            curr++;
+        } else {
+            if (c == '\n' || curr == config.len - 1) {
+                parse_state = TRUE;
+
+                if (c != '\n') val.len++;
+                ConfigVal* v = ConfigMapGet(m, key);
+                if (!v) {
+                    ConfigVal n = {
+                        .vals.a = m->a,
+                        .mem.a = m->a,
+                    };
+                    ConfigMapIns(m, key, n); 
+                    v = ConfigMapGet(m, key);
+                }
+
+                void* dst = DynArenaAlloc(&v->mem, val.len);
+                memcpy(dst, val.data, val.len);
+                val.data = dst;
+                dynPush(v->vals, val);
+
+                curr++;
+                key.data = &config.data[curr];
+                key.len = 0;
+                continue;
+            }
+            val.len++;
+            curr++;
+        } 
+    }
+}

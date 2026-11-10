@@ -28,7 +28,7 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    TodoCtx ctx = InitDataBase((Config){0});
+    TodoCtx ctx = InitDataBase(sstring(""));
     ScratchArena sc = ScratchArenaGet(NULL);
     Allocator scratch = ArenaGetAllocator(sc.arena);
 

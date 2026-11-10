@@ -131,19 +131,25 @@ typedef struct TodoIter {
     sqlite3_stmt* query;
 } TodoIter;
 
-typedef struct Config {
-    SString db_loc;
-    dynArray(SString) default_tags;
-} Config;
+typedef struct {
+    dynArray(SString) vals;
+    DynArena mem;
+} ConfigVal;
+
+DefStringMapDecl(ConfigMap, ConfigVal);
 
 typedef struct TodoCtx {
     ArenaAllocator mem;
     sqlite3* db;
-    Config c; 
+
+    ConfigMap config;
+    SString db_loc;
+    dynArray(SString) default_tags;
+
     dynArray(u64) tag_ids;
 } TodoCtx;
 
-TodoCtx InitDataBase(Config overrides);
+TodoCtx InitDataBase(SString overrides);
 void ClearDataBase(TodoCtx* ctx);
 
 //Todo
@@ -207,7 +213,11 @@ TagIter SearchWithExpr(TodoCtx* ctx, SString data, char** errmsg);
 
 
 //config
-Config GetConfig(Allocator a);
+
+//To Override preinitialize out
+void GetConfig(ConfigMap* out);
+void ParseConfig(ConfigMap* m, SString config);
+
 
 
 #endif

@@ -5,7 +5,7 @@ int main() {
     logfile->buffered = FALSE;
 
     {
-        SString data = sstring("PRIORITY > '");
+        SString data = sstring(":req");
 
         ParsingData p = {
             .tok = {
@@ -21,7 +21,7 @@ int main() {
                 "SELECT todos.id, todos.name, todos.body, todos.priority AS PRIORITY, todos.completion AS COMPLETION "
                 "FROM todos LEFT JOIN todo_tags ON todos.id = todo_tags.todo "
                 "LEFT JOIN tags ON tags.id = todo_tags.tag "
-                "GROUP BY todos.name "
+                "GROUP BY todos.id "
                 "HAVING ");
 
         dynExt(p.query, prefix.data, prefix.len);

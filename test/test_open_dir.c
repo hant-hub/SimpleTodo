@@ -2,7 +2,7 @@
 
 int main() {
     logfile->buffered = FALSE;
-    TodoCtx db = InitDataBase((Config){.db_loc = sstring("/tmp/test/database")});
+    TodoCtx db = InitDataBase(sstring("db_loc: /tmp/mkdr/test/database"));
     ClearDataBase(&db);
     return 0;
 }

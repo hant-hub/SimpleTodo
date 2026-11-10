@@ -3,7 +3,7 @@
 
 int main() {
     logfile->buffered = FALSE;
-    TodoCtx ctx = InitDataBase((Config){.db_loc = sstring("/tmp/database")});
+    TodoCtx ctx = InitDataBase(sstring("db_loc: /tmp/database"));
     ClearDataBase(&ctx);
 
     ScratchArena sc = ScratchArenaGet(NULL);
