@@ -8,11 +8,11 @@ int main() {
     ScratchArena sc = ScratchArenaGet(NULL);
     Allocator scratch = ArenaGetAllocator(sc.arena);
 
-    u64 todo1 = AddTodo(&ctx, sstring("todo1"), sstring(""), 0, TODO_NOT_STARTED);
-    u64 todo2 = AddTodo(&ctx, sstring("todo2"), sstring(""), 0, TODO_NOT_STARTED);
-    u64 todo3 = AddTodo(&ctx, sstring("todo3"), sstring(""), 0, TODO_NOT_STARTED);
-    u64 todo4 = AddTodo(&ctx, sstring("todo4"), sstring(""), 0, TODO_NOT_STARTED);
-    u64 todo5 = AddTodo(&ctx, sstring("todo5"), sstring(""), 0, TODO_NOT_STARTED);
+    u64 todo1 = AddTodo(&ctx, sstring("todo1"), sstring(""), 0, 0);
+    u64 todo2 = AddTodo(&ctx, sstring("todo2"), sstring(""), 0, 0);
+    u64 todo3 = AddTodo(&ctx, sstring("todo3"), sstring(""), 0, 0);
+    u64 todo4 = AddTodo(&ctx, sstring("todo4"), sstring(""), 0, 0);
+    u64 todo5 = AddTodo(&ctx, sstring("todo5"), sstring(""), 0, 0);
 
     u64 tag1 = AddTag(&ctx, sstring("tag1"));
     u64 tag2 = AddTag(&ctx, sstring("tag2"));

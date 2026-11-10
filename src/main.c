@@ -15,11 +15,11 @@ int main() {
     u64 tag3_id = AddTag(&ctx, sstring("test3"));
     u64 tag4_id = AddTag(&ctx, sstring("test4"));
 
-    u64 todo1_id = AddTodo(&ctx, sstring("test1"), sstring("some random info"), 0);
-    u64 todo2_id = AddTodo(&ctx, sstring("test2"), sstring("some random info"), 0);
-    u64 todo3_id = AddTodo(&ctx, sstring("test3"), sstring("some random info"), 0);
-    u64 todo4_id = AddTodo(&ctx, sstring("test4"), sstring("some random info"), 0);
-    AddTodo(&ctx, sstring("test2"), sstring("some other random info"), 0);
+    u64 todo1_id = AddTodo(&ctx, sstring("test1"), sstring("some random info"), 0, 0);
+    u64 todo2_id = AddTodo(&ctx, sstring("test2"), sstring("some random info"), 0, 0);
+    u64 todo3_id = AddTodo(&ctx, sstring("test3"), sstring("some random info"), 0, 0);
+    u64 todo4_id = AddTodo(&ctx, sstring("test4"), sstring("some random info"), 0, 0);
+    AddTodo(&ctx, sstring("test2"), sstring("some other random info"), 0, 0);
 
 
     AddLink(&ctx, todo1_id, tag1_id);
@@ -80,9 +80,9 @@ int main() {
         EndTagIter(&it);
     }
 
-    char* err;
+    char* err = NULL;
     TagIter it = SearchWithExpr(&ctx, sstring("(NOT :test1 AND test)"), &err);
-    printlog("Error: %n\n", err);
+    printlog("Error: %n\n", err ? err : "No Error");
 
     Config c = GetConfig(scratch);
     printlog("Config:\n");
@@ -95,7 +95,9 @@ int main() {
 
     //stringification
 
-    Todo todo = GetTodoID(&ctx, scratch, todo1_id);
+    u64 todo_id = AddTodo(&ctx, sstring("serialize"), sstring("some random info"), 1.5, 20);
+
+    Todo todo = GetTodoID(&ctx, scratch, todo_id);
     SString str = StringifyTodo(&ctx, &todo, sc.arena);
     printlog("Str:\n%s\n", str);
 
@@ -104,9 +106,12 @@ int main() {
 
     assert(Sstrcmp(todo.name, todo2.name));
     assert(Sstrcmp(todo.body, todo2.body));
+    assert(todo.id == todo2.id);
+    assert(todo.completion == todo2.completion);
+    assert(todo.priority == todo2.priority);
 
     Todo todo3 = DeStringifyTodo(&ctx, sstring("# a"), scratch, &err);
-    printlog("Error: %n\n", err);
+    printlog("Error: %n\n", err ? err : "No Error");
 
     ScratchArenaEnd(sc);
     return 0;

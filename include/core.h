@@ -5,6 +5,102 @@
 #include <ds/ds.h>
 #include <sqlite3.h>
 
+//Internal functions only
+#ifdef DEBUG
+typedef enum TokenType {
+    TOKEN_INVALID = 0, //uninitialized tokens are invalid
+    TOKEN_ID,
+    TOKEN_ANY,
+    TOKEN_NUM,
+    TOKEN_TAG,
+    TOKEN_AND,
+    TOKEN_NOT,
+    TOKEN_OR,
+    TOKEN_LT,
+    TOKEN_GT,
+    TOKEN_EQ,
+    TOKEN_NEQ,
+    TOKEN_LE,
+    TOKEN_GE,
+    TOKEN_OPAREN,
+    TOKEN_CPAREN,
+    TOKEN_END,
+} TokenType;
+
+static const SString token_names[] = {
+    [TOKEN_ID]      = sstring("ID"),
+    [TOKEN_NUM]     = sstring("NUM"),
+    [TOKEN_TAG]     = sstring("TAG"),
+    [TOKEN_AND]     = sstring("AND"),
+    [TOKEN_NOT]     = sstring("NOT"),
+    [TOKEN_ANY]     = sstring("ANY"),
+    [TOKEN_OR]      = sstring("OR"),
+
+    [TOKEN_LT]      = sstring("LT"),
+    [TOKEN_GT]      = sstring("GT"),
+    [TOKEN_EQ]      = sstring("EQ"),
+    [TOKEN_NEQ]     = sstring("NEQ"),
+    [TOKEN_LE]      = sstring("LE"),
+    [TOKEN_GE]      = sstring("GE"),
+
+    [TOKEN_OPAREN]  = sstring("OPAREN"),
+    [TOKEN_CPAREN]  = sstring("CPAREN"),
+    [TOKEN_END]     = sstring("END"),
+    [TOKEN_INVALID] = sstring("INVALID"),
+};
+
+typedef struct Token {
+    TokenType t;
+    SString token;
+} Token;
+
+typedef struct ExprTokenizer {
+    char* data;
+    u32 curr;
+    u32 max;
+    Token token;
+} ExprTokenizer;
+
+#include "setjmp.h"
+
+typedef enum ErrorCode {
+    ERROR_NO_ERROR = 0,
+    ERROR_INVALID_UNARY,
+    ERROR_INVALID_ID,
+    ERROR_INVALID_TOKEN,
+    ERROR_UNEXPECTED_TOKEN,
+} ErrorCode;
+
+typedef struct ParsingData {
+    ExprTokenizer tok;
+    dynArray(char) query;
+
+    struct {
+        ErrorCode code;
+        u32 index;
+        jmp_buf handler;
+    } err;
+    
+} ParsingData;
+
+static const SString errormsgs[] = {
+    [ERROR_NO_ERROR]            = sstring("No Error: Should never happen"),
+    [ERROR_INVALID_UNARY]       = sstring("Invalid Unary: Expected TAG, NOT, ANY, or '(' Got %s"),
+    [ERROR_INVALID_ID]          = sstring("Invalid %s: Got '%s'"),
+    [ERROR_INVALID_TOKEN]       = sstring("Invalid Token"),
+    [ERROR_UNEXPECTED_TOKEN]    = sstring("Unexpected Token: Got %s"),
+};
+
+void _NextToken(ExprTokenizer* t);
+
+void ParseExpr(ParsingData* p);
+void ParseOExpr(ParsingData* p);
+void ParseCExpr(ParsingData* p);
+void ParseUnary(ParsingData* p, bool8 negated);
+void ParseID(ParsingData* p);
+#endif
+
+
 #define SQL_CALL(x) \
         do { \
             int rc = x; \
@@ -17,6 +113,7 @@
 typedef struct Todo {
     u64 id;
     f32 priority;
+    u32 completion;
     SString name;
     SString body;
 } Todo;
@@ -53,7 +150,7 @@ void ClearDataBase(TodoCtx* ctx);
 void DeleteTodoID(TodoCtx* ctx, u64 t);
 void DeleteTodoName(TodoCtx* ctx, SString name);
 
-u64 AddTodo(TodoCtx* ctx, SString name, SString body, f32 priority);
+u64 AddTodo(TodoCtx* ctx, SString name, SString body, f32 priority, u32 completion);
 Todo GetTodoID(TodoCtx* ctx, Allocator a, u64 id);
 Todo GetTodoName(TodoCtx* ctx, Allocator a, SString name);
 

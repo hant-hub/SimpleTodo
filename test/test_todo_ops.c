@@ -10,7 +10,7 @@ int main() {
 
     {
         //test insertion actually works
-        u64 todo_id = AddTodo(&ctx, sstring("test1"), sstring("todo body"), 0, TODO_NOT_STARTED);
+        u64 todo_id = AddTodo(&ctx, sstring("test1"), sstring("todo body"), 0, 0);
         Todo t = GetTodoID(&ctx, scratch, todo_id);
 
         assert(t.id == todo_id);
@@ -26,8 +26,8 @@ int main() {
         assert(t.body.data == NULL);
 
         //test uniqueness
-        todo_id = AddTodo(&ctx, sstring("test1"), sstring("todo body"), 0, TODO_NOT_STARTED);
-        u64 todo_id2 = AddTodo(&ctx, sstring("test1"), sstring("todo body 2"), 0, TODO_NOT_STARTED);
+        todo_id = AddTodo(&ctx, sstring("test1"), sstring("todo body"), 0, 0);
+        u64 todo_id2 = AddTodo(&ctx, sstring("test1"), sstring("todo body 2"), 0, 0);
 
         t = GetTodoID(&ctx, scratch, todo_id);
 
@@ -41,7 +41,7 @@ int main() {
 
     {
         //test insertion actually works
-        u64 todo_id = AddTodo(&ctx, sstring("test1"), sstring("todo body"), 0, TODO_NOT_STARTED);
+        u64 todo_id = AddTodo(&ctx, sstring("test1"), sstring("todo body"), 0, 0);
         Todo t = GetTodoName(&ctx, scratch, sstring("test1"));
 
         assert(t.id == todo_id);
@@ -57,8 +57,8 @@ int main() {
         assert(t.body.data == NULL);
 
         //test uniqueness
-        todo_id = AddTodo(&ctx, sstring("test1"), sstring("todo body"), 0, TODO_NOT_STARTED);
-        u64 todo_id2 = AddTodo(&ctx, sstring("test1"), sstring("todo body 2"), 0, TODO_NOT_STARTED);
+        todo_id = AddTodo(&ctx, sstring("test1"), sstring("todo body"), 0, 0);
+        u64 todo_id2 = AddTodo(&ctx, sstring("test1"), sstring("todo body 2"), 0, 0);
 
         t = GetTodoName(&ctx, scratch, sstring("test1"));
 

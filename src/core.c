@@ -1,5 +1,12 @@
 #include <core.h>
 
+#ifdef DEBUG
+#define INTERNAL_ONLY
+#else
+#define INTERNAL_ONLY static
+#endif
+
+#ifndef DEBUG
 typedef enum TokenType {
     TOKEN_INVALID = 0, //uninitialized tokens are invalid
     TOKEN_ID,
@@ -9,6 +16,12 @@ typedef enum TokenType {
     TOKEN_AND,
     TOKEN_NOT,
     TOKEN_OR,
+    TOKEN_LT,
+    TOKEN_GT,
+    TOKEN_EQ,
+    TOKEN_NEQ,
+    TOKEN_LE,
+    TOKEN_GE,
     TOKEN_OPAREN,
     TOKEN_CPAREN,
     TOKEN_END,
@@ -22,6 +35,14 @@ const SString token_names[] = {
     [TOKEN_NOT]     = sstring("NOT"),
     [TOKEN_ANY]     = sstring("ANY"),
     [TOKEN_OR]      = sstring("OR"),
+
+    [TOKEN_LT]      = sstring("LT"),
+    [TOKEN_GT]      = sstring("GT"),
+    [TOKEN_EQ]      = sstring("EQ"),
+    [TOKEN_NEQ]     = sstring("NEQ"),
+    [TOKEN_LE]      = sstring("LE"),
+    [TOKEN_GE]      = sstring("GE"),
+
     [TOKEN_OPAREN]  = sstring("OPAREN"),
     [TOKEN_CPAREN]  = sstring("CPAREN"),
     [TOKEN_END]     = sstring("END"),
@@ -40,6 +61,39 @@ typedef struct ExprTokenizer {
     Token token;
 } ExprTokenizer;
 
+
+#include "setjmp.h"
+
+typedef enum ErrorCode {
+    ERROR_NO_ERROR = 0,
+    ERROR_INVALID_UNARY,
+    ERROR_INVALID_ID,
+    ERROR_INVALID_TOKEN,
+    ERROR_UNEXPECTED_TOKEN,
+} ErrorCode;
+
+typedef struct ParsingData {
+    ExprTokenizer tok;
+    dynArray(char) query;
+
+    struct {
+        ErrorCode code;
+        u32 index;
+        jmp_buf handler;
+    } err;
+    
+} ParsingData;
+
+static const SString errormsgs[] = {
+    [ERROR_NO_ERROR]            = sstring("No Error: Should never happen"),
+    [ERROR_INVALID_UNARY]       = sstring("Invalid Unary: Expected TAG, NOT, ANY, or '(' Got %s"),
+    [ERROR_INVALID_ID]          = sstring("Invalid %s: Got '%s'"),
+    [ERROR_INVALID_TOKEN]       = sstring("Invalid Token"),
+    [ERROR_UNEXPECTED_TOKEN]    = sstring("Unexpected Token: Got %s"),
+};
+
+#endif
+
 //return TRUE if sucess, FALSE if failed
 bool8 PopChar(ExprTokenizer* tok) {
     tok->curr++;
@@ -54,24 +108,80 @@ bool8 PopChar(ExprTokenizer* tok) {
 // EXPR := OEXPR
 //      |  OPEXR AND EXPR
 //
-// OEXPR := UNARY
+// OEXPR := CEXPR
+//       |  CEXPR OR OEXPR
 //       |  UNARY OR OEXPR
+//
+// CEXPR := ID
+//       |  ID CMP CEXPR
+//
+// CMP := LT
+//     |  GT
+//     |  EQ
+//     |  NEQ
+//     |  LE
+//     |  GE
 //
 // UNARY := NOT UNARY
 //        | TAG
 //        | ANY
-//        | ID
 //        | '(' EXPR ')'
 //
-// TAG := ':' ID
+// TAG := ':' String
+//
+// ID := 'ANY'
+//     | 'PRIORITY'
+//     | 'COMPLETION'
 //
 
-static void NextToken(ExprTokenizer* t) {
+INTERNAL_ONLY void _NextToken(ExprTokenizer* t) {
     //Eat Whitespace
     while (isSpace(t->data[t->curr]) && PopChar(t));
 
     if (t->curr >= t->max) {
+        PopChar(t);
         t->token = (Token){TOKEN_END};
+        return;
+    }
+
+    if (t->max - t->curr >= 2 && t->data[t->curr] == '!' && t->data[t->curr + 1] == '=') {
+        PopChar(t);
+        PopChar(t);
+        t->token = (Token){ .t = TOKEN_NEQ };
+        return;
+    }
+
+    if (t->max - t->curr >= 2 && t->data[t->curr] == '<' && t->data[t->curr + 1] == '=') {
+        PopChar(t);
+        PopChar(t);
+        t->token = (Token){ .t = TOKEN_LE };
+        return;
+    }
+
+    if (t->max - t->curr >= 2 && t->data[t->curr] == '>' && t->data[t->curr + 1] == '=') {
+        PopChar(t);
+        PopChar(t);
+        t->token = (Token){ .t = TOKEN_GE };
+        return;
+    }
+
+    //These three must come after the 2 char operators since otherwise the 2 long ones would
+    //never work
+    if (t->data[t->curr] == '=') {
+        PopChar(t);
+        t->token = (Token){ .t = TOKEN_EQ };
+        return;
+    }
+
+    if (t->data[t->curr] == '<') {
+        PopChar(t);
+        t->token = (Token){ .t = TOKEN_LT };
+        return;
+    }
+
+    if (t->data[t->curr] == '>') {
+        PopChar(t);
+        t->token = (Token){ .t = TOKEN_GT };
         return;
     }
 
@@ -127,6 +237,11 @@ static void NextToken(ExprTokenizer* t) {
         char* start = &t->data[t->curr];
         u32 len = 0;
         while (isNum(t->data[t->curr]) && PopChar(t)) len++;
+        if (t->data[t->curr] == '.') {
+            PopChar(t), len++;
+            while (isNum(t->data[t->curr]) && PopChar(t)) len++;
+        }
+
         t->token = (Token){TOKEN_NUM, .token = (SString){len, (i8*)start}};
         return;
     }
@@ -143,30 +258,11 @@ static void NextToken(ExprTokenizer* t) {
         return;
     }
 
+    PopChar(t);
     t->token = (Token){TOKEN_INVALID};
     return;
 }
 
-#include "setjmp.h"
-
-typedef enum ErrorCode {
-    ERROR_NO_ERROR = 0,
-    ERROR_INVALID_UNARY,
-    ERROR_INVALID_ID,
-    ERROR_UNEXPECTED_TOKEN,
-} ErrorCode;
-
-typedef struct ParsingData {
-    ExprTokenizer tok;
-    dynArray(char) query;
-
-    struct {
-        ErrorCode code;
-        u32 index;
-        jmp_buf handler;
-    } err;
-    
-} ParsingData;
 
 #define Expect(p, x) \
     do { \
@@ -177,16 +273,26 @@ typedef struct ParsingData {
         } \
     } while (0)
 
-const SString errormsgs[] = {
-    [ERROR_NO_ERROR]            = sstring("No Error: Should never happen"),
-    [ERROR_INVALID_UNARY]       = sstring("Invalid Unary: Expected TAG, NOT, ANY, or '(' Got %s"),
-    [ERROR_INVALID_ID]          = sstring("Invalid %s: Got '%s'"),
-    [ERROR_UNEXPECTED_TOKEN]    = sstring("Unexpected Token: Got %s"),
-};
+#define CheckValid(p) \
+    do { \
+        if (p->tok.token.t == TOKEN_INVALID) {\
+            p->err.code = ERROR_INVALID_TOKEN; \
+            p->err.index = p->tok.curr; \
+            longjmp(p->err.handler, 1); \
+        } \
+    } while (0)
 
-static void ParseExpr(ParsingData* p);
-static void ParseOExpr(ParsingData* p);
-static void ParseUnary(ParsingData* p, bool8 negated);
+#define NextToken(p) \
+    do { \
+        _NextToken(&(p)->tok); \
+        CheckValid((p)); \
+    } while (0)
+
+INTERNAL_ONLY void ParseExpr(ParsingData* p);
+INTERNAL_ONLY void ParseOExpr(ParsingData* p);
+INTERNAL_ONLY void ParseCExpr(ParsingData* p);
+INTERNAL_ONLY void ParseUnary(ParsingData* p, bool8 negated);
+INTERNAL_ONLY void ParseID(ParsingData* p);
 
 TagIter SearchWithExpr(TodoCtx* ctx, SString data, char** errmsg) {
     ParsingData p = {
@@ -200,8 +306,9 @@ TagIter SearchWithExpr(TodoCtx* ctx, SString data, char** errmsg) {
     int r = setjmp(p.err.handler);
     if (r) {
         //handle error
-        u32 len = errormsgs[p.err.code].len + token_names[p.tok.token.t].len + 2;
+        u32 len = errormsgs[p.err.code].len + 2 * token_names[p.tok.token.t].len + 2;
         char* msg = Alloc(GlobalAllocator, len);
+        memset(msg, 0, len);
         sformat((SString){len, (i8*)msg}, (char*)errormsgs[p.err.code].data, token_names[p.tok.token.t], p.tok.token.token);
 
         *errmsg = msg;
@@ -210,7 +317,8 @@ TagIter SearchWithExpr(TodoCtx* ctx, SString data, char** errmsg) {
 
 
     SString prefix = sstring(
-        "SELECT todos.id, todos.name, todos.body FROM todos LEFT JOIN todo_tags ON todos.id = todo_tags.todo "
+            "SELECT todos.id, todos.name, todos.body, todos.priority AS PRIORITY, todos.completion AS COMPLETION "
+            "FROM todos LEFT JOIN todo_tags ON todos.id = todo_tags.todo "
             "LEFT JOIN tags ON tags.id = todo_tags.tag "
             "GROUP BY todos.name "
             "HAVING ");
@@ -218,7 +326,7 @@ TagIter SearchWithExpr(TodoCtx* ctx, SString data, char** errmsg) {
     dynExt(p.query, prefix.data, prefix.len);
 
     //run next token to init tokenizer
-    NextToken(&p.tok);
+    NextToken(&p);
     ParseExpr(&p);
 
     //printlog("Query: %s\n", (SString){p.query.size, (i8*)p.query.data});
@@ -236,9 +344,9 @@ TagIter SearchWithExpr(TodoCtx* ctx, SString data, char** errmsg) {
     return output;
 }
 
-static void ParseUnary(ParsingData* p, bool8 negated) {
+INTERNAL_ONLY void ParseUnary(ParsingData* p, bool8 negated) {
     if (p->tok.token.t == TOKEN_NOT) {
-        NextToken(&p->tok);
+        NextToken(p);
         ParseUnary(p, !negated);
         return;
     }
@@ -246,14 +354,14 @@ static void ParseUnary(ParsingData* p, bool8 negated) {
     if (p->tok.token.t == TOKEN_OPAREN) {
         dynPush(p->query, '(');
 
-        NextToken(&p->tok);
+        NextToken(p);
         ParseExpr(p);
 
         dynPush(p->query, ')');
 
         Expect(p, TOKEN_CPAREN);
 
-        NextToken(&p->tok);
+        NextToken(p);
         return;
     }
 
@@ -267,7 +375,7 @@ static void ParseUnary(ParsingData* p, bool8 negated) {
         } else {
             dynExt(p->query, " > 0", 4);
         }
-        NextToken(&p->tok);
+        NextToken(p);
         return;
     }
 
@@ -278,27 +386,61 @@ static void ParseUnary(ParsingData* p, bool8 negated) {
         } else {
             dynExt(p->query, "true", 4);
         }
-        NextToken(&p->tok);
+        NextToken(p);
         return;
     }
-
-    if (p->tok.token.t == TOKEN_ID) {
-        p->err.code = ERROR_INVALID_ID;
-        p->err.index = p->tok.curr;
-        longjmp(p->err.handler, 1);
-
-        NextToken(&p->tok);
-        return;
-    }
-
 
     p->err.code = ERROR_INVALID_UNARY;
     p->err.index = p->tok.curr;
     longjmp(p->err.handler, 1);
 }
 
-static void ParseOExpr(ParsingData* p) {
-    ParseUnary(p, FALSE); //always start with Unary
+INTERNAL_ONLY void ParseID(ParsingData* p) {
+    if (p->tok.token.t == TOKEN_NUM ||
+        Sstrcmp(p->tok.token.token, sstring("PRIORITY")) ||
+        Sstrcmp(p->tok.token.token, sstring("COMPLETION"))) {
+
+        dynExt(p->query, p->tok.token.token.data, p->tok.token.token.len);
+        NextToken(p); 
+        return;    
+    }
+
+    dynExt(p->query, "(todos.name LIKE \'%", 19);
+    dynExt(p->query, p->tok.token.token.data, p->tok.token.token.len);
+    dynExt(p->query, "%\')", 3);
+
+    NextToken(p); 
+}
+
+INTERNAL_ONLY void ParseCExpr(ParsingData* p) {
+    ParseID(p);
+
+    if (p->tok.token.t == TOKEN_OR) return; //done parsing
+    if (p->tok.token.t == TOKEN_AND) return; //done parsing
+    if (p->tok.token.t == TOKEN_END) return; //done parsing
+    if (p->tok.token.t == TOKEN_CPAREN) return;
+
+    if (p->tok.token.t == TOKEN_EQ) dynExt(p->query, " = ", 3);
+    if (p->tok.token.t == TOKEN_LT) dynExt(p->query, " < ", 3);
+    if (p->tok.token.t == TOKEN_GT) dynExt(p->query, " > ", 3);
+    if (p->tok.token.t == TOKEN_NEQ) dynExt(p->query, " != ", 4);
+    if (p->tok.token.t == TOKEN_LE) dynExt(p->query, " <= ", 4);
+    if (p->tok.token.t == TOKEN_GE) dynExt(p->query, " >= ", 4);
+
+    NextToken(p); 
+    ParseCExpr(p);
+}
+
+INTERNAL_ONLY void ParseOExpr(ParsingData* p) {
+
+    if (p->tok.token.t == TOKEN_OPAREN || p->tok.token.t == TOKEN_ANY || p->tok.token.t == TOKEN_TAG || p->tok.token.t == TOKEN_NOT)
+        ParseUnary(p, FALSE);
+    else { 
+        dynExt(p->query, "SUM( IFNULL(", 12);
+        ParseCExpr(p);
+        dynExt(p->query, ", 0) )", 6);
+        dynExt(p->query, " > 0", 4);
+    }
 
     if (p->tok.token.t == TOKEN_AND) return; //done parsing
     if (p->tok.token.t == TOKEN_END) return; //done parsing
@@ -309,11 +451,11 @@ static void ParseOExpr(ParsingData* p) {
 
     dynExt(p->query, " OR ", 4);
 
-    NextToken(&p->tok); 
-    ParseExpr(p);
+    NextToken(p); 
+    ParseOExpr(p);
 }
 
-static void ParseExpr(ParsingData* p) {
+INTERNAL_ONLY void ParseExpr(ParsingData* p) {
     ParseOExpr(p); //always start with Unary
 
     if (p->tok.token.t == TOKEN_END) return; //done parsing
@@ -323,7 +465,7 @@ static void ParseExpr(ParsingData* p) {
     Expect(p, TOKEN_AND);
 
     dynExt(p->query, " AND ", 5);
-    NextToken(&p->tok); 
+    NextToken(p); 
     ParseExpr(p);
 }
 
@@ -484,11 +626,11 @@ void DeleteTodoName(TodoCtx* ctx, SString name) {
 
 }
 
-u64 AddTodo(TodoCtx* ctx, SString name, SString body, f32 priority) {
+u64 AddTodo(TodoCtx* ctx, SString name, SString body, f32 priority, u32 completion) {
     static sqlite3_stmt* statement = NULL;
 
     if (!statement) {
-        SQL_CALL(sqlite3_prepare_v2(ctx->db, "INSERT INTO todos(id, name, body, priority) VALUES(NULL, ?, ?, ?) ON CONFLICT(name) DO UPDATE SET body = excluded.body, priority = excluded.priority RETURNING id", -1, &statement, NULL));
+        SQL_CALL(sqlite3_prepare_v2(ctx->db, "INSERT INTO todos(id, name, body, priority, completion) VALUES(NULL, ?, ?, ?, ?) ON CONFLICT(name) DO UPDATE SET body = excluded.body, priority = excluded.priority, completion = excluded.completion RETURNING id", -1, &statement, NULL));
     } else {
         sqlite3_reset(statement);
     }
@@ -496,6 +638,7 @@ u64 AddTodo(TodoCtx* ctx, SString name, SString body, f32 priority) {
     SQL_CALL(sqlite3_bind_text(statement, 1, (char*)name.data, name.len, SQLITE_TRANSIENT));
     SQL_CALL(sqlite3_bind_text(statement, 2, (char*)body.data, body.len, SQLITE_TRANSIENT));
     SQL_CALL(sqlite3_bind_double(statement, 3, priority));
+    SQL_CALL(sqlite3_bind_int64(statement, 4, completion));
 
     int rc;
     i64 id;
@@ -527,7 +670,7 @@ Todo GetTodoID(TodoCtx* ctx, Allocator a, u64 id) {
 
     if (!statement) {
         //we already know the id
-        SQL_CALL(sqlite3_prepare_v2(ctx->db, "SELECT name, body, priority FROM todos WHERE rowid = ?" , -1, &statement, NULL));
+        SQL_CALL(sqlite3_prepare_v2(ctx->db, "SELECT name, body, priority, completion FROM todos WHERE rowid = ?" , -1, &statement, NULL));
     } else {
         sqlite3_reset(statement);
     }
@@ -551,6 +694,7 @@ Todo GetTodoID(TodoCtx* ctx, Allocator a, u64 id) {
             }
             {
                 res.priority = sqlite3_column_double(statement, 2);
+                res.completion = sqlite3_column_int(statement, 3);
             }
             continue;
         }
@@ -570,7 +714,7 @@ Todo GetTodoName(TodoCtx* ctx, Allocator a, SString name) {
 
     if (!statement) {
         //we already know the id
-        SQL_CALL(sqlite3_prepare_v2(ctx->db, "SELECT id, body, priority FROM todos WHERE name = ?" , -1, &statement, NULL));
+        SQL_CALL(sqlite3_prepare_v2(ctx->db, "SELECT id, body, priority, completion FROM todos WHERE name = ?" , -1, &statement, NULL));
     } else {
         sqlite3_reset(statement);
     }
@@ -592,6 +736,7 @@ Todo GetTodoName(TodoCtx* ctx, Allocator a, SString name) {
             }
             {
                 res.priority = sqlite3_column_double(statement, 2);
+                res.completion = sqlite3_column_int(statement, 3);
             }
             continue;
         }
@@ -621,10 +766,16 @@ SString StringifyTodo(TodoCtx* ctx, Todo* t, ArenaAllocator a) {
     }
     buffer[curr++] = '\n';
 
-    //priority
+    //status
+    SString status_prefix = sstring("Completion: ");
+    ArenaExtendLast(a, status_prefix.len + 15);
+    curr += sformat((SString){.data = (i8*)&buffer[curr], .len = status_prefix.len + 15}, "%s%d%%", status_prefix, t->completion);
+    buffer[curr++] = '\n';
 
-    ArenaExtendLast(a, 15);
-    curr += sformat((SString){.data = (i8*)&buffer[curr], .len = 14}, "%f", t->priority);
+    //priority
+    SString priority_prefix = sstring("Priority: ");
+    ArenaExtendLast(a, priority_prefix.len + 15);
+    curr += sformat((SString){.data = (i8*)&buffer[curr], .len = priority_prefix.len + 15}, "%s%f", priority_prefix, t->priority);
     buffer[curr++] = '\n';
 
     //tags
@@ -697,27 +848,64 @@ Todo DeStringifyTodo(TodoCtx* ctx, SString data, Allocator a, char** err) {
         return (Todo){0};
     }
 
-    //this clears the tags so that we can remove tags
-    DeleteTodoName(ctx, name);
-    u64 todo_id = AddTodo(ctx, name, sstring(""), 0);
+    {
+        //DO NOT call allocator a in here,
+        //this uses the scratch allocator and
+        //calling a in here can cause memory corruption
+
+        ScratchArena sc = ScratchArenaGet(NULL);
+        Allocator scratch = ArenaGetAllocator(sc.arena);
+        //this clears the tags so that we can remove tags
+
+        Todo t = GetTodoName(ctx, scratch, name);
+        DeleteLinkTodo(ctx, t.id);
+        ScratchArenaEnd(sc);
+    }
+
+    u64 todo_id = AddTodo(ctx, name, sstring(""), 0, 0);
 
     if (curr >= data.len) {
         return GetTodoID(ctx, a, todo_id);
     }
+    Advance(curr, data.len);
 
+    //completion
+    SString status_prefix = sstring("Completion: ");
+    for (u32 i = 0; i < status_prefix.len; i++) {
+        if (status_prefix.data[i] != data.data[curr]) {
+            return GetTodoID(ctx, a, todo_id);
+        }
+        Advance(curr, data.len);
+    }
+
+    u32 completion;
+    curr += StrtoU32((SString){.data = &data.data[curr], .len = data.len - curr}, &completion);
+    while (data.data[curr] != '\n') Advance(curr, data.len);
+
+    if (curr > data.len) {
+        u64 todo_id = AddTodo(ctx, name, sstring(""), 0, completion);
+        return GetTodoID(ctx, a, todo_id);
+    }
     Advance(curr, data.len);
     
     //priority
+    SString priority_prefix = sstring("Priority: ");
+    for (u32 i = 0; i < priority_prefix.len; i++) {
+        if (priority_prefix.data[i] != data.data[curr++]) {
+            return GetTodoID(ctx, a, todo_id);
+        }
+    }
     
     f32 priority;
-    Strtofloat((SString){.data = &data.data[curr], .len = data.len - curr}, &priority);
+    curr += Strtofloat((SString){.data = &data.data[curr], .len = data.len - curr}, &priority);
     while (data.data[curr] != '\n') Advance(curr, data.len);
     if (curr > data.len) {
-        u64 todo_id = AddTodo(ctx, name, sstring(""), priority);
+        u64 todo_id = AddTodo(ctx, name, sstring(""), priority, completion);
         return GetTodoID(ctx, a, todo_id);
     }
     Advance(curr, data.len);
 
+    //get tags
     SString curr_tag = {0};
     while (1) {
         if (data.data[curr] == ' ' || data.data[curr] == '\n') {
@@ -747,11 +935,12 @@ Todo DeStringifyTodo(TodoCtx* ctx, SString data, Allocator a, char** err) {
         return GetTodoID(ctx, a, todo_id);
     }
 
+    //pull body
     SString body = { .data = &data.data[curr] };
-    while (curr < data.len) body.len++, curr++;
+    while (curr < data.len && data.data[curr] != 0) body.len++, curr++;
 
     *err = NULL;
-    AddTodo(ctx, name, body, priority);
+    AddTodo(ctx, name, body, priority, completion);
     return GetTodoID(ctx, a, todo_id);
 }
 

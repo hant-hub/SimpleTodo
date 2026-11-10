@@ -10,11 +10,11 @@ int main() {
     Allocator scratch = ArenaGetAllocator(sc.arena);
 
     //set up todos and tags
-    u64 todo1 = AddTodo(&ctx, sstring("todo1"), sstring(""), 5, TODO_NOT_STARTED);
-    u64 todo2 = AddTodo(&ctx, sstring("todo2"), sstring(""), 4, TODO_NOT_STARTED);
-    u64 todo3 = AddTodo(&ctx, sstring("todo3"), sstring(""), 3, TODO_NOT_STARTED);
-    u64 todo4 = AddTodo(&ctx, sstring("todo4"), sstring(""), 2, TODO_NOT_STARTED);
-    u64 todo5 = AddTodo(&ctx, sstring("todo5"), sstring(""), 1, TODO_NOT_STARTED);
+    u64 todo1 = AddTodo(&ctx, sstring("todo1"), sstring(""), 5, 0);
+    u64 todo2 = AddTodo(&ctx, sstring("todo2"), sstring(""), 4, 0);
+    u64 todo3 = AddTodo(&ctx, sstring("todo3"), sstring(""), 3, 0);
+    u64 todo4 = AddTodo(&ctx, sstring("todo4"), sstring(""), 2, 0);
+    u64 todo5 = AddTodo(&ctx, sstring("todo5"), sstring(""), 1, 0);
 
     u64 tag1 = AddTag(&ctx, sstring("tag1"));
 

@@ -1,23 +1,22 @@
 #define SB_IMPL
 #include "./sbuild_st.h"
 
-
-
 int main(int argc, char* argv[]) {
+    logfile->buffered = FALSE;
 
     AutoRebuild(argc, argv);
     setdirExe();
 
     TaskGraph g = CreateTaskGraph();
-    //ScratchArena sc = ScratchArenaGet(NULL);
+    ////ScratchArena sc = ScratchArenaGet(NULL);
 
     Task* pre_compile = AddDummyTask(&g);
     {
         Task* top = NULL;
         if (!filestat(sstring("build")).stats.size) {
             Task* mkdir = AddTask(&g, "Make Build Dir");
-            AddCmd(mkdir, "mkdir", "build/");
-            AddCmd(mkdir, "mkdir", "build/tests");
+            //AddCmd(mkdir, "mkdir", "build/");
+            AddCmd(mkdir, "mkdir", "-p", "build/tests");
             top = mkdir;
         }
 
@@ -48,24 +47,50 @@ int main(int argc, char* argv[]) {
         AddDep(pre_compile, top);
     }
 
-    Exec(pre_compile, 4); 
-    ClearTaskGraph(&g);
-
     BegCompile(&g, TRUE, sstring("compile_commands.json"));
+
+    //this is dumb as hell, but for some reason
+    //when a process exits it doesn't sync with the file system,
+    //so sqlite3 isn't fully available when ar starts
+    Task* pre_lib = AddDummyTask(&g);
+    {
+        Task* sqlite = CompileCmd(&g, "build/sqlite3.o", Spread("-c", "src/sqlite3.c", "-Ilib/cutils/include", "-Iinclude/"), pre_compile);
+        Task* core = CompileCmd(&g, "build/core.o", Spread("-c", "src/core.c", "-Ilib/cutils/include", "-Iinclude/"), pre_compile);
+        AddDep(pre_lib, sqlite);
+        AddDep(pre_lib, core);
+    }
+    {
+        Task* sqlite = CompileCmd(&g, "build/sqlite3_debug.o", Spread("-DDEBUG", "-g", "-c", "src/sqlite3.c", "-Ilib/cutils/include", "-Iinclude/"), pre_compile);
+        Task* core = CompileCmd(&g, "build/core_debug.o", Spread("-DDEBUG", "-g", "-c", "src/core.c", "-Ilib/cutils/include", "-Iinclude/"), pre_compile);
+        AddDep(pre_lib, sqlite);
+        AddDep(pre_lib, core);
+    }
+
+    //build static lib
+    Task* debug_lib = AddTask(&g, "build debug lib", pre_lib);
+    AddCmd(debug_lib, "ar", "rcUu", "build/st_debug.a", "build/sqlite3_debug.o", "build/core_debug.o");
+    AddDep(debug_lib, pre_lib);
+
+    Task* lib = AddTask(&g, "build lib", pre_lib);
+    AddCmd(lib, "ar", "rcUu", "build/st.a", "build/sqlite3.o", "build/core.o");
+    AddDep(lib, pre_lib);
+
     
     //build app
-    Task* app = CompileCmd(&g, "build/app", Spread("src/main.c", "src/sqlite3.c", "src/core.c", "build/cutils.a",
-                "-Ilib/cutils/include", "-Iinclude/"));
+    Task* app = CompileCmd(&g, "build/app", Spread("-g", "src/main.c", "build/st_debug.a", "build/cutils.a",
+                "-Ilib/cutils/include", "-Iinclude/"), debug_lib);
 
     Task* build_tests = AddDummyTask(&g);
     ScratchArena sc = ScratchArenaGet(NULL);
 
     //build stls
-    Task* stls = CompileCmd(&g, "build/stls", Spread("src/stls.c", "src/sqlite3.c", "src/core.c", "build/cutils.a",
-                                                    "-Ilib/cutils/include", "-Iinclude/"));
+    Task* stls = CompileCmd(&g, "build/stls", Spread("src/stls.c", "build/st.a", "build/cutils.a",
+                "-Ilib/cutils/include", "-Iinclude/"), lib);
 
-    Task* stedit = CompileCmd(&g, "build/stedit", Spread("src/stedit.c", "src/sqlite3.c", "src/core.c", "build/cutils.a",
-                                                    "-Ilib/cutils/include", "-Iinclude/"));
+    Task* stedit = CompileCmd(&g, "build/stedit", Spread("src/stedit.c", "build/st.a", "build/cutils.a",
+                "-Ilib/cutils/include", "-Iinclude/"), lib);
+
+
 
     //build tests
     const SString test_dir = sstring("./test");
@@ -94,14 +119,15 @@ int main(int argc, char* argv[]) {
         printlog("Output: %n %n\n", output.data, src.data);
 
         Task* t = CompileCmd(&g, (char*)output.data,
-                Spread((char*)src.data, "-g", "src/sqlite3.c",  "src/core.c", "build/cutils.a", "-Ilib/cutils/include", "-Iinclude/"));
+                Spread((char*)src.data, "-g", "-DDEBUG", "build/st_debug.a", "build/cutils.a", "-Ilib/cutils/include", "-Iinclude/"),
+                debug_lib);
 
         AddDep(build_tests, t);
     }
 
     Task* final = AddDummyTask(&g, build_tests, app, stls, stedit);
     final = EndCompile(&g, final);
-    Exec(final, 4);
+    Exec(final, 2);
 
     ScratchArenaEnd(sc);
     FreeTaskGraph(&g);

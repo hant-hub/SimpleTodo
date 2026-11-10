@@ -42,7 +42,7 @@ int main(int argc, char* argv[]) {
     Todo t = GetTodoName(&ctx, scratch, name);
     bool8 new = FALSE;
     if (t.id == 0) {
-        t.id = AddTodo(&ctx, name, sstring(""), 0);
+        t.id = AddTodo(&ctx, name, sstring(""), 0, 0);
         new = TRUE;
     }
 
