@@ -71,7 +71,7 @@ int main() {
     }
 
     {
-        TagIter it = SearchWithExpr(&ctx, sstring("(NOT :test1 AND NOT :test2)"), NULL);
+        TagIter it = SearchWithExpr(&ctx, 0, 0, sstring("(NOT :test1 AND NOT :test2)"), NULL);
         Todo t;
         printlog("Testing Parse Iter:\n");
         while (NextTodo(&it, scratch, &t) != ITER_DONE) {
@@ -81,7 +81,7 @@ int main() {
     }
 
     char* err = NULL;
-    TagIter it = SearchWithExpr(&ctx, sstring("(NOT :test1 AND test)"), &err);
+    TagIter it = SearchWithExpr(&ctx, 0, 0, sstring("(NOT :test1 AND test)"), &err);
     printlog("Error: %n\n", err ? err : "No Error");
 
     //stringification

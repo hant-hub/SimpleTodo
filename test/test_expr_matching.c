@@ -34,7 +34,7 @@ int main() {
 
     {
         bool8 found[2] = {0};
-        TagIter it = SearchWithExpr(&ctx, sstring(":tag1"), NULL);
+        TagIter it = SearchWithExpr(&ctx, 0, 0, sstring(":tag1"), NULL);
         while (1) {
             Todo t;
             IterState s = NextTodo(&it, scratch, &t);
@@ -53,8 +53,65 @@ int main() {
     }
 
     {
+        bool8 found[1] = {0};
+        TagIter it = SearchWithExpr(&ctx, 1, 0, sstring(":tag1"), NULL);
+        while (1) {
+            Todo t;
+            IterState s = NextTodo(&it, scratch, &t);
+            if (s == ITER_ERR) panic();
+            if (s == ITER_DONE) break;
+
+            if (t.id == todo1) { found[0] = TRUE; continue; }
+            panic();
+        }
+        EndTagIter(&it);
+
+        for (u32 i = 0; i < ARRAY_SIZE(found); i++) {
+            assert(found[i]);
+        }
+    }
+
+    {
+        bool8 found[1] = {0};
+        TagIter it = SearchWithExpr(&ctx, 0, 1, sstring(":tag1"), NULL);
+        while (1) {
+            Todo t;
+            IterState s = NextTodo(&it, scratch, &t);
+            if (s == ITER_ERR) panic();
+            if (s == ITER_DONE) break;
+
+            if (t.id == todo3) { found[0] = TRUE; continue; }
+            panic();
+        }
+        EndTagIter(&it);
+
+        for (u32 i = 0; i < ARRAY_SIZE(found); i++) {
+            assert(found[i]);
+        }
+    }
+
+    {
+        bool8 found[1] = {0};
+        TagIter it = SearchWithExpr(&ctx, 1, 1, sstring(":tag1"), NULL);
+        while (1) {
+            Todo t;
+            IterState s = NextTodo(&it, scratch, &t);
+            if (s == ITER_ERR) panic();
+            if (s == ITER_DONE) break;
+
+            if (t.id == todo3) { found[0] = TRUE; continue; }
+            panic();
+        }
+        EndTagIter(&it);
+
+        for (u32 i = 0; i < ARRAY_SIZE(found); i++) {
+            assert(found[i]);
+        }
+    }
+
+    {
         bool8 found[3] = {0};
-        TagIter it = SearchWithExpr(&ctx, sstring(":tag3 OR :tag2"), NULL);
+        TagIter it = SearchWithExpr(&ctx, 0, 0, sstring(":tag3 OR :tag2"), NULL);
         while (1) {
             Todo t;
             IterState s = NextTodo(&it, scratch, &t);
@@ -74,7 +131,7 @@ int main() {
     }
 
     {
-        TagIter it = SearchWithExpr(&ctx, sstring(":tag3 AND :tag2"), NULL);
+        TagIter it = SearchWithExpr(&ctx, 0, 0, sstring(":tag3 AND :tag2"), NULL);
         while (1) {
             Todo t;
             IterState s = NextTodo(&it, scratch, &t);
@@ -88,7 +145,7 @@ int main() {
 
     {
         bool8 found[1] = {0};
-        TagIter it = SearchWithExpr(&ctx, sstring("(:tag3 OR :tag2) AND :tag1"), NULL);
+        TagIter it = SearchWithExpr(&ctx, 0, 0, sstring("(:tag3 OR :tag2) AND :tag1"), NULL);
         while (1) {
             Todo t;
             IterState s = NextTodo(&it, scratch, &t);

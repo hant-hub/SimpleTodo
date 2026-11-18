@@ -83,3 +83,12 @@ are more than 80% complete.
 ```
 This searches for todos with tag1 and either tag2 or tag3.
 
+## Configuration
+
+All simpletodo tools can be configured via a `.todo.conf` file.
+Tools will start in the directory they are called and walk upwards
+adding `.todo.conf` files as they are found.
+
+This means you can have local configurations which override the default
+values for things like database location, or adding required tags which
+will be automatically applied to todos.

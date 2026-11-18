@@ -2,19 +2,19 @@
 TODOs:
 - [ ] Goal Get rid of this file
 
-- [ ] Bulk Edit
-    - [ ] Bulk Delete
+- [ ] stedit
+    - [ ] Improve help
+    - [ ] Add bulk edit functionality
 
-- [ ] Stls improvements
-    - [ ] Colorized output
-    - [ ] Unicode
-    - [ ] query tags
-    - [ ] Limit + Offset
+- [X] Stls improvements
+    - [X] Colorized output
+    - [X] Unicode
+    - [X] query tags
+    - [X] Limit + Offset
+    - [X] render out to markdown
 
-- [ ] Add Conditional Build
-    - [ ] Only rebuild tests if src is newer than dst
-
-
+- [X] Add Conditional Build
+    - [X] Only rebuild tests if src is newer than dst
 - [X] Config Improvement
     - [X] Arbitary fields
     - [X] Multimap style values 

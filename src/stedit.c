@@ -4,39 +4,42 @@
 
 #include <stdlib.h>
 
-#define ARGS \
-    X(name, string)
+#include <sargs/sa_pre.h>
 
-#include "sa.h"
+#define PROG_NAME "stedit"
+#define PROG_DESC "Tool for editing todos"
 
-const char* helpmsg = "Usage: stedit [OPTIONS] [NAME]\n"
-                "---\n"
-                "Opens Markdown of Todo which can be edited.\n"
-                "By default uses the editor in the EDITOR env variable.\n";
+#define REQS \
+    ARG(name, char*, "Todo name for editing")
+
+#define FLAGS \
+    FLAG(b, bulk, bool8, "Edit many todos at once")
+
+
+#include <sargs/sa.h>
+
 
 int main(int argc, char* argv[]) {
     logfile->buffered = FALSE;
-    if (argc < 2) {
-        printlog(helpmsg);
+
+    SA args = ParseArgs(argc, argv);
+
+    if (args.err) {
+        printerr("%n\n", args.err);
         return 1;
     }
 
-    SA s = Parse(argc, argv);
-
-    if (s.err) {
-        printlog(helpmsg);
-        return 1;
-    }
 
     TodoCtx ctx = InitDataBase(sstring(""));
     ScratchArena sc = ScratchArenaGet(NULL);
     Allocator scratch = ArenaGetAllocator(sc.arena);
 
-    SAvals vals = s.vals;
+    if (args.flags.b.p) {}
+
 
     SString name = (SString) {
-        .data = (i8*)vals.name,
-        .len = strlen(vals.name)
+        .data = (i8*)args.args.name,
+        .len = strlen(args.args.name)
     };
 
     Todo t = GetTodoName(&ctx, scratch, name);

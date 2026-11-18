@@ -93,6 +93,10 @@ int main(int argc, char* argv[]) {
 
 
     //build tests
+    
+
+    file c_file = filestat(sstring("src/core.c"));
+
     const SString test_dir = sstring("./test");
     DirBegin(test_dir);
     while (1) {
@@ -118,11 +122,16 @@ int main(int argc, char* argv[]) {
         sformat(output, "%s%s", prefix, base);
         printlog("Output: %n %n\n", output.data, src.data);
 
-        Task* t = CompileCmd(&g, (char*)output.data,
-                Spread((char*)src.data, "-g", "-DDEBUG", "build/st_debug.a", "build/cutils.a", "-Ilib/cutils/include", "-Iinclude/"),
-                debug_lib);
+        file s_file = filestat(src);
+        file o_file = filestat(output);
 
-        AddDep(build_tests, t);
+        if (timecmp(s_file.stats.modified, >=, o_file.stats.modified) ||
+            timecmp(c_file.stats.modified, >=, o_file.stats.modified)) {
+            Task* t = CompileCmd(&g, (char*)output.data,
+                    Spread((char*)src.data, "-g", "-DDEBUG", "build/st_debug.a", "build/cutils.a", "-Ilib/cutils/include", "-Iinclude/"),
+                    debug_lib);
+            AddDep(build_tests, t);
+        }
     }
 
     Task* final = AddDummyTask(&g, build_tests, app, stls, stedit);

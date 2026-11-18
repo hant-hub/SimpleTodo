@@ -69,6 +69,7 @@ typedef struct ExprTokenizer {
 typedef enum ErrorCode {
     ERROR_NO_ERROR = 0,
     ERROR_INVALID_UNARY,
+    ERROR_TAGS_DISABLED,
     ERROR_INVALID_ID,
     ERROR_INVALID_TOKEN,
     ERROR_UNEXPECTED_TOKEN,
@@ -77,6 +78,11 @@ typedef enum ErrorCode {
 typedef struct ParsingData {
     ExprTokenizer tok;
     dynArray(char) query;
+
+    struct {
+        bool8 enable_tag;
+        SString name_field;
+    } flags;
 
     struct {
         ErrorCode code;
@@ -89,6 +95,7 @@ typedef struct ParsingData {
 static const SString errormsgs[] = {
     [ERROR_NO_ERROR]            = sstring("No Error: Should never happen"),
     [ERROR_INVALID_UNARY]       = sstring("Invalid Unary: Expected TAG, NOT, ANY, or '(' Got %s"),
+    [ERROR_TAGS_DISABLED]       = sstring("Tags Disabled: Tag type invalid when searching tags"),
     [ERROR_INVALID_ID]          = sstring("Invalid %s: Got '%s'"),
     [ERROR_INVALID_TOKEN]       = sstring("Invalid Token"),
     [ERROR_UNEXPECTED_TOKEN]    = sstring("Unexpected Token: Got %s"),
@@ -296,11 +303,18 @@ INTERNAL_ONLY void ParseCExpr(ParsingData* p);
 INTERNAL_ONLY void ParseUnary(ParsingData* p, bool8 negated);
 INTERNAL_ONLY void ParseID(ParsingData* p);
 
-TagIter SearchWithExpr(TodoCtx* ctx, SString data, char** errmsg) {
+TagIter SearchWithExpr(TodoCtx* ctx, u32 limit, u32 offset, SString data, char** errmsg) {
+
+    ScratchArena sc = ScratchArenaGet(NULL);
+
     ParsingData p = {
         .tok = {
             .data = (char*)data.data,
             .max = data.len,
+        },
+        .flags = {
+            .enable_tag = TRUE,
+            .name_field = sstring("todos.name"),
         },
         .query.a = GlobalAllocator
     };
@@ -314,6 +328,8 @@ TagIter SearchWithExpr(TodoCtx* ctx, SString data, char** errmsg) {
         sformat((SString){len, (i8*)msg}, (char*)errormsgs[p.err.code].data, token_names[p.tok.token.t], p.tok.token.token);
 
         *errmsg = msg;
+
+        ScratchArenaEnd(sc);
         return (TagIter){0};
     }
 
@@ -322,14 +338,36 @@ TagIter SearchWithExpr(TodoCtx* ctx, SString data, char** errmsg) {
             "SELECT todos.id, todos.name, todos.body, todos.priority AS PRIORITY, todos.completion AS COMPLETION "
             "FROM todos LEFT JOIN todo_tags ON todos.id = todo_tags.todo "
             "LEFT JOIN tags ON tags.id = todo_tags.tag "
-            "GROUP BY todos.name "
-            "HAVING ");
-
+            "GROUP BY todos.name ");
     dynExt(p.query, prefix.data, prefix.len);
+
+    SString postfix = (SString) {
+        .data = ArenaAlloc(sc.arena, 64),
+        .len = 37 * 2
+    };
+
+
+    dynExt(p.query, " HAVING ", 8);
 
     //run next token to init tokenizer
     NextToken(&p);
     ParseExpr(&p);
+
+    dynExt(p.query, " ORDER BY PRIORITY DESC, todos.name ", 36);
+
+    if (limit || offset) {
+        if (!limit) limit = 1000; //idk man
+        u32 len = sformat(postfix, " LIMIT %d ", limit);
+        postfix.len = len;
+        dynExt(p.query, postfix.data, postfix.len);
+    }
+
+    if (offset) {
+        u32 len = sformat(postfix, " OFFSET %d ", offset);
+        postfix.len = len;
+        dynExt(p.query, postfix.data, postfix.len);
+    }
+
 
     //printlog("Query: %s\n", (SString){p.query.size, (i8*)p.query.data});
 
@@ -343,6 +381,80 @@ TagIter SearchWithExpr(TodoCtx* ctx, SString data, char** errmsg) {
         //mark as success{
         *errmsg = NULL;
     }
+    ScratchArenaEnd(sc);
+    return output;
+}
+
+TodoIter SearchTags(TodoCtx* ctx, u32 limit, u32 offset, SString data, char** errmsg) {
+
+    ScratchArena sc = ScratchArenaGet(NULL);
+    ParsingData p = {
+        .tok = {
+            .data = (char*)data.data,
+            .max = data.len,
+        },
+        .flags = {
+            .enable_tag = FALSE,
+            .name_field = sstring("tags.name"),
+        },
+        .query = {
+            .a = GlobalAllocator
+        }
+    };
+
+    int r = setjmp(p.err.handler);
+    if (r) {
+        //handle error
+        u32 len = errormsgs[p.err.code].len + 2 * token_names[p.tok.token.t].len + 2;
+        char* msg = Alloc(GlobalAllocator, len);
+        memset(msg, 0, len);
+        sformat((SString){len, (i8*)msg}, (char*)errormsgs[p.err.code].data, token_names[p.tok.token.t], p.tok.token.token);
+
+        *errmsg = msg;
+        ScratchArenaEnd(sc);
+        return (TodoIter){0};
+    }
+
+    SString fixed = sstring("SELECT tags.id, tags.name FROM tags GROUP BY tags.id ");
+    dynExt(p.query, fixed.data, fixed.len);
+
+    SString prefix = (SString) {
+        .data = ArenaAlloc(sc.arena, 64),
+        .len = 37 * 2
+    };
+
+    dynExt(p.query, "HAVING ", 7);
+
+    //run next token to init tokenizer
+    NextToken(&p);
+    ParseExpr(&p);
+
+    if (limit || offset) {
+        if (!limit) limit = 1000; //idk man
+        u32 len = sformat(prefix, " LIMIT %d ", limit);
+        prefix.len = len;
+        dynExt(p.query, prefix.data, prefix.len);
+    }
+
+    if (offset) {
+        u32 len = sformat(prefix, " OFFSET %d ", offset);
+        prefix.len = len;
+        dynExt(p.query, prefix.data, prefix.len);
+    }
+
+    //printlog("Query: %s\n", (SString){p.query.size, (i8*)p.query.data});
+
+    TodoIter output = {};
+    SQL_CALL(sqlite3_prepare_v2(ctx->db, p.query.data, p.query.size, &output.query, NULL));
+
+    dynFree(p.query);
+
+
+    if (errmsg) {
+        //mark as success{
+        *errmsg = NULL;
+    }
+    ScratchArenaEnd(sc);
     return output;
 }
 
@@ -368,6 +480,12 @@ INTERNAL_ONLY void ParseUnary(ParsingData* p, bool8 negated) {
     }
 
     if (p->tok.token.t == TOKEN_TAG) {
+        if (p->flags.enable_tag == FALSE) {
+            p->err.code = ERROR_TAGS_DISABLED;
+            p->err.index = p->tok.curr;
+            longjmp(p->err.handler, 1);
+        }
+
         dynExt(p->query, "SUM( IFNULL(tags.name = \'", 25);
         dynExt(p->query, p->tok.token.token.data, p->tok.token.token.len);
         dynExt(p->query, "\', 0) )", 7);
@@ -397,6 +515,7 @@ INTERNAL_ONLY void ParseUnary(ParsingData* p, bool8 negated) {
     longjmp(p->err.handler, 1);
 }
 
+
 INTERNAL_ONLY void ParseID(ParsingData* p) {
     if (p->tok.token.t == TOKEN_NUM ||
         Sstrcmp(p->tok.token.token, sstring("PRIORITY")) ||
@@ -407,7 +526,9 @@ INTERNAL_ONLY void ParseID(ParsingData* p) {
         return;    
     }
 
-    dynExt(p->query, "(todos.name LIKE \'%", 19);
+    dynPush(p->query, '(');
+    dynExt(p->query, p->flags.name_field.data, p->flags.name_field.len); 
+    dynExt(p->query, " LIKE \'%", 8);
     dynExt(p->query, p->tok.token.token.data, p->tok.token.token.len);
     dynExt(p->query, "%\')", 3);
 
@@ -564,18 +685,19 @@ TodoCtx InitDataBase(SString overrides) {
     out.tag_ids.a = ArenaGetAllocator(out.mem);
 
     ConfigMap config = { .a = GlobalAllocator };
-    ParseConfig(&config, default_config);
     ParseConfig(&config, overrides);
     GetConfig(&config);
+    ParseConfig(&config, default_config);
 
-    //printlog("Db_loc: %s\n", dynBack((ConfigMapGet(&config, sstring("db_loc"))->vals)));
-
-    out.db_loc = dynBack((ConfigMapGet(&config, sstring("db_loc"))->vals));
+    //use first
+    out.db_loc = ConfigMapGet(&config, sstring("db_loc"))->vals.data[0];
 
     //mkdir
     assert(!mkdirRec(filepathpopdir(out.db_loc)));
     assert(!sqlite3_open((char*)out.db_loc.data, &out.db));
     InitializeTables(out.db);
+    sqlite3_extended_result_codes(out.db, 1);
+
     
     ConfigVal* v = ConfigMapGet(&config, sstring("addkey")); 
     if (v) {
@@ -596,8 +718,13 @@ void ClearDataBase(TodoCtx* ctx) {
 
     InitializeTables(ctx->db); //reinitialize tables
 
-    for (u32 i = 0; i < ctx->default_tags.size; i++) {
-        u64 id = AddTag(ctx, ctx->default_tags.data[i]);
+    ConfigVal* v = ConfigMapGet(&ctx->config, sstring("addkey")); 
+    ctx->tag_ids.size = 0;
+    if (v) {
+        for (u32 i = 0; i < v->vals.size; i++) {
+            u64 id = AddTag(ctx, v->vals.data[i]);
+            dynPush(ctx->tag_ids, id);
+        }
     }
 }
 
@@ -969,6 +1096,124 @@ Todo DeStringifyTodo(TodoCtx* ctx, SString data, Allocator a, char** err) {
     return GetTodoID(ctx, a, todo_id);
 }
 
+//Format:
+//Keep - Completion - Priority - Name
+// - [X] XX% (%%) Name
+// The checkbox is for deleting the node, uncheck it to remove it
+SString StringifyTodoList(TagIter it, ArenaAllocator a) {
+    i8* data = ArenaAllocZero(a, 0); 
+    u32 curr = 0;
+
+    while (1) {
+        Todo t;
+        ScratchArena sc = ScratchArenaGet(a);
+        IterState s = NextTodo(&it, ArenaGetAllocator(sc.arena), &t);
+        if (s == ITER_DONE || s == ITER_ERR) {
+            ScratchArenaEnd(sc);
+            break;
+        }
+
+        SString pre = sstring("- [");
+        ArenaExtendLast(a, pre.len);
+        memcpy(&data[curr], pre.data, pre.len);
+        curr += pre.len;
+
+        ArenaExtendLast(a, 3);
+        data[curr++] = 'X';
+        data[curr++] = ']';
+        data[curr++] = ' ';
+
+        ArenaExtendLast(a, 5);
+        u32 inc = sformat((SString){ .data = data + curr, .len = 5 }, "%d%% ", t.completion);
+        curr += inc;
+
+        for (u32 i = 0; i < 5 - inc; i++) {
+            data[curr++] = ' ';
+        }
+
+        ArenaExtendLast(a, 30);
+        inc = sformat((SString){ .data = data + curr, .len = 6 }, "(%f", t.priority > 0.001 ? t.priority : 0.0);
+        curr += inc;
+        data[curr++] = ')';
+        data[curr++] = ' ';
+
+        for (u32 i = 0; i < 6 - inc; i++) {
+            data[curr++] = ' ';
+        }
+
+        ArenaExtendLast(a, t.name.len);
+        memcpy(&data[curr], t.name.data, t.name.len);
+        curr += t.name.len;
+
+        ArenaExtendLast(a, 1);
+        data[curr++] = '\n';
+        ScratchArenaEnd(sc);
+    }
+
+    return (SString){
+        .data = data,
+        .len = curr,
+    };
+}
+
+void DeStringifyTodoList(TodoCtx* ctx, SString data, Allocator a, char** err) {
+    u32 curr = 0;
+
+    //runs per line
+    while (curr < data.len) {
+        if (data.data[curr++] != '-') break;        
+        if (data.data[curr++] != ' ') break;
+        if (data.data[curr++] != '[') break;
+
+        bool8 delete = FALSE;
+        if (data.data[curr] == ' ') {
+            delete = TRUE;
+        } else if (data.data[curr] != 'X') {
+            break; //invalid format
+        }
+        curr++;
+
+        if (data.data[curr++] != ']') break;
+        if (data.data[curr++] != ' ') break;
+        u32 com = -1;
+        u32 l = StrtoU32((SString){.data = &data.data[curr], .len = data.len - curr}, &com);
+        curr += l;
+
+        if (data.data[curr++] != '%') break;
+        while (curr < data.len && data.data[curr] != '(' && data.data[curr] != '\n') curr++;
+        if (data.data[curr] != '(') break;
+        curr++;
+
+        float priority = -1.0;
+        curr += Strtofloat((SString){.data = &data.data[curr], .len = data.len - curr}, &priority);
+
+
+        if (data.data[curr++] != ')') break;
+
+        while (curr < data.len && data.data[curr] == ' ') curr++;
+        if (data.data[curr] == '\n') break;
+
+        SString name = {
+            .data = &data.data[curr],
+        };
+
+        while (curr < data.len && data.data[curr] != '\n') {
+            curr++;
+            name.len++;
+        }
+        if (data.data[curr] != '\n') break;
+
+        printlog("Name: %s\tCom: %d\t Pr: %f\t Delete: %d\n", name, com, priority, delete);
+
+        curr++;
+    }
+
+
+
+
+    todo();
+}
+
 TodoIter BeginTodoIter(TodoCtx* ctx, u64 todo) {
     sqlite3_stmt* statement = NULL;
 
@@ -1170,7 +1415,7 @@ TagIter BeginTagIter(TodoCtx* ctx, u64 tag) {
 
     //we already know the id
     SQL_CALL(sqlite3_prepare_v2(ctx->db, 
-                "SELECT id, name, body, priority FROM "
+                "SELECT id, name, body, priority, completion FROM "
                 "todo_tags JOIN todos ON "
                 "todo_tags.todo = todos.id "
                 "WHERE todo_tags.tag = ? "
@@ -1209,6 +1454,7 @@ IterState NextTodo(TagIter* iter, Allocator a, Todo* out) {
 
             out->body = Sstrdup(a, data);
             out->priority = sqlite3_column_double(iter->query, 3);
+            out->completion = sqlite3_column_int(iter->query, 4);
 
             return ITER_PENDING;
         }

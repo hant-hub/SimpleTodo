@@ -66,6 +66,7 @@ typedef struct ExprTokenizer {
 typedef enum ErrorCode {
     ERROR_NO_ERROR = 0,
     ERROR_INVALID_UNARY,
+    ERROR_TAGS_DISABLED,
     ERROR_INVALID_ID,
     ERROR_INVALID_TOKEN,
     ERROR_UNEXPECTED_TOKEN,
@@ -74,6 +75,11 @@ typedef enum ErrorCode {
 typedef struct ParsingData {
     ExprTokenizer tok;
     dynArray(char) query;
+
+    struct {
+        bool8 enable_tag;
+        SString name_field;
+    } flags;
 
     struct {
         ErrorCode code;
@@ -86,6 +92,7 @@ typedef struct ParsingData {
 static const SString errormsgs[] = {
     [ERROR_NO_ERROR]            = sstring("No Error: Should never happen"),
     [ERROR_INVALID_UNARY]       = sstring("Invalid Unary: Expected TAG, NOT, ANY, or '(' Got %s"),
+    [ERROR_TAGS_DISABLED]       = sstring("Tags Disabled: Tag type invalid when searching tags"),
     [ERROR_INVALID_ID]          = sstring("Invalid %s: Got '%s'"),
     [ERROR_INVALID_TOKEN]       = sstring("Invalid Token"),
     [ERROR_UNEXPECTED_TOKEN]    = sstring("Unexpected Token: Got %s"),
@@ -168,6 +175,10 @@ SString StringifyTodo(TodoCtx* ctx, Todo* t, ArenaAllocator a); //should always 
 
 Todo DeStringifyTodo(TodoCtx* ctx, SString data, Allocator a, char** err);
 
+SString StringifyTodoList(TagIter it, ArenaAllocator a);
+void DeStringifyTodoList(TodoCtx* ctx, SString data, Allocator a, char** err);
+
+
 typedef enum IterState {
     ITER_DONE,
     ITER_PENDING,
@@ -208,7 +219,12 @@ bool8 GetLink(TodoCtx* ctx, u64 todo, u64 tag);
 //Note(ELI): This function avoid needing to sanitize the user input by
 //parsing it. Invalid input which would result in SQL injection results
 //in an ERROR
-TagIter SearchWithExpr(TodoCtx* ctx, SString data, char** errmsg);
+TagIter SearchWithExpr(TodoCtx* ctx, u32 limit, u32 offset, SString data, char** errmsg);
+
+
+//Not full search grammar, only supports the LIKE stuff and not 
+//the :tag or PRIORITY stuff
+TodoIter SearchTags(TodoCtx* ctx, u32 limit, u32 offset, SString data, char** errmsg);
 
 
 

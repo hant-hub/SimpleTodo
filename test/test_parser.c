@@ -12,6 +12,10 @@ int main() {
                 .data = (char*)data.data,
                 .max = data.len,
             },
+            .flags = {
+                .enable_tag = TRUE,
+                .name_field = sstring("todos.name"),
+            },
             .query = {
                 .a = GlobalAllocator
             }
