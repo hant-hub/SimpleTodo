@@ -1,10 +1,10 @@
 
 TODOs:
-- [ ] Goal Get rid of this file
+- [X] Goal Get rid of this file
 
-- [ ] stedit
-    - [ ] Improve help
-    - [ ] Add bulk edit functionality
+- [X] stedit
+    - [X] Improve help
+    - [X] Add bulk edit functionality
 
 - [X] Stls improvements
     - [X] Colorized output
