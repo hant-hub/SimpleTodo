@@ -16,13 +16,12 @@ int main() {
     u64 todo4 = AddTodo(&ctx, sstring("todo4"), sstring(""), 0.001, 0);
     u64 todo5 = AddTodo(&ctx, sstring("todo5"), sstring(""), 0, 0);
 
-
     char* err;
     TagIter it = SearchWithExpr(&ctx, 0, 0, sstring("ANY"), &err);
     assert(!err);
 
-    SString out = StringifyTodoList(it, sc.arena);
-    printlog("[Keep] Completion%% (Priority) Name\n");
+    SString out = StringifyTodoList(&ctx, it, sc.arena);
+    printlog("- [Keep] Completion%% (Priority) Name :tags\n");
     printlog("%s\n", out);
 
 

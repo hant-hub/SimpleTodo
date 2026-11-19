@@ -175,8 +175,8 @@ SString StringifyTodo(TodoCtx* ctx, Todo* t, ArenaAllocator a); //should always 
 
 Todo DeStringifyTodo(TodoCtx* ctx, SString data, Allocator a, char** err);
 
-SString StringifyTodoList(TagIter it, ArenaAllocator a);
-void DeStringifyTodoList(TodoCtx* ctx, SString data, Allocator a, char** err);
+SString StringifyTodoList(TodoCtx* ctx, TagIter it, ArenaAllocator a);
+void DeStringifyTodoList(TodoCtx* ctx, SString data, ArenaAllocator a, char** err);
 
 
 typedef enum IterState {

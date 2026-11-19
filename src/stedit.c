@@ -18,24 +18,10 @@
 
 #include <sargs/sa.h>
 
-
-int main(int argc, char* argv[]) {
-    logfile->buffered = FALSE;
-
-    SA args = ParseArgs(argc, argv);
-
-    if (args.err) {
-        printerr("%n\n", args.err);
-        return 1;
-    }
-
-
+void singleEdit(SA args) {
     TodoCtx ctx = InitDataBase(sstring(""));
     ScratchArena sc = ScratchArenaGet(NULL);
     Allocator scratch = ArenaGetAllocator(sc.arena);
-
-    if (args.flags.b.p) {}
-
 
     SString name = (SString) {
         .data = (i8*)args.args.name,
@@ -69,7 +55,7 @@ int main(int argc, char* argv[]) {
     if (res == 1 && new) {
         //error occurred
         DeleteTodoID(&ctx, t.id);
-        return 1;
+        exit(1);
     }
 
     file f = fileopen(file_buf, FILE_READ);
@@ -89,11 +75,92 @@ int main(int argc, char* argv[]) {
 
     if (err) {
         printlog("Error: %n\n", err);
-        return 1;
+        exit(1);
     }
 
     ScratchArenaEnd(sc);
     filedelete(file_buf);
+    exit(0);
+}
 
-    return 0;
+void multiEdit(SA args) {
+    TodoCtx ctx = InitDataBase(sstring(""));
+    ScratchArena sc = ScratchArenaGet(NULL);
+    Allocator scratch = ArenaGetAllocator(sc.arena);
+
+    if (args.flags.b.p) {}
+
+
+    SString name = (SString) {
+        .data = (i8*)args.args.name,
+        .len = strlen(args.args.name)
+    };
+
+    char* err;
+    TagIter it = SearchWithExpr(&ctx, 0, 0, name, &err);
+
+    SString buf = StringifyTodoList(&ctx, it, sc.arena);
+
+    SString file_buf = {
+        .data = ArenaAllocZero(sc.arena, name.len + 3 + 5),
+        .len = 3 + 5 + name.len
+    };
+
+    SString file_cmd = {
+        .data = ArenaAllocZero(sc.arena, file_buf.len + 8),
+        .len = 8 + file_buf.len 
+    };
+
+    sformat(file_buf, "/tmp/%s.md", name);
+    sformat(file_cmd, "$EDITOR %s", file_buf);
+
+    filesave(file_buf, buf);
+    int res = system((char*)file_cmd.data);
+
+    if (res == 1) {
+        //error occurred
+        //make no changes
+        exit(1);
+    }
+
+    file f = fileopen(file_buf, FILE_READ);
+
+    SString data = {
+        .len = f.stats.size,
+        .data = ArenaAllocZero(sc.arena, f.stats.size)
+    };
+    fileread(data, f);
+    fileclose(f);
+
+    err = NULL;
+    DeStringifyTodoList(&ctx, data, sc.arena, &err);
+
+    if (err) {
+        printlog("Error: %n\n", err);
+        exit(1);
+    }
+
+    ScratchArenaEnd(sc);
+    filedelete(file_buf);
+    exit(0);
+}
+
+
+int main(int argc, char* argv[]) {
+    logfile->buffered = FALSE;
+
+    SA args = ParseArgs(argc, argv);
+
+    if (args.err) {
+        printerr("%n\n", args.err);
+        return 1;
+    }
+
+    if (args.flags.b.p) {
+        multiEdit(args);
+    } else {
+        singleEdit(args);
+    }
+
+    panic();
 }

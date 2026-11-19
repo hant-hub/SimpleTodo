@@ -1100,7 +1100,7 @@ Todo DeStringifyTodo(TodoCtx* ctx, SString data, Allocator a, char** err) {
 //Keep - Completion - Priority - Name
 // - [X] XX% (%%) Name
 // The checkbox is for deleting the node, uncheck it to remove it
-SString StringifyTodoList(TagIter it, ArenaAllocator a) {
+SString StringifyTodoList(TodoCtx* ctx, TagIter it, ArenaAllocator a) {
     i8* data = ArenaAllocZero(a, 0); 
     u32 curr = 0;
 
@@ -1141,9 +1141,34 @@ SString StringifyTodoList(TagIter it, ArenaAllocator a) {
             data[curr++] = ' ';
         }
 
-        ArenaExtendLast(a, t.name.len);
+        ArenaExtendLast(a, t.name.len + 1);
         memcpy(&data[curr], t.name.data, t.name.len);
         curr += t.name.len;
+        data[curr++] = ' ';
+
+        TodoIter it = BeginTodoIter(ctx, t.id);
+
+        while (1) { 
+            ScratchArena sc = ScratchArenaGet(a);
+            Tag t;
+            IterState st = NextTag(&it, ArenaGetAllocator(sc.arena), &t);
+            if (st == ITER_DONE || st == ITER_ERR) {
+                ScratchArenaEnd(sc);
+                break;
+            }
+
+            ArenaExtendLast(a, t.name.len + 2);
+
+            data[curr++] = ':';
+            memcpy(&data[curr], t.name.data, t.name.len);
+            curr += t.name.len;
+            data[curr++] = ' ';
+
+            ScratchArenaEnd(sc);
+        }
+
+        EndTodoIter(&it);
+
 
         ArenaExtendLast(a, 1);
         data[curr++] = '\n';
@@ -1156,62 +1181,164 @@ SString StringifyTodoList(TagIter it, ArenaAllocator a) {
     };
 }
 
-void DeStringifyTodoList(TodoCtx* ctx, SString data, Allocator a, char** err) {
+void DeStringifyTodoList(TodoCtx* ctx, SString data, ArenaAllocator a, char** err) {
     u32 curr = 0;
+    *err = NULL;
+    char* err_tmp = NULL;
 
     //runs per line
     while (curr < data.len) {
-        if (data.data[curr++] != '-') break;        
-        if (data.data[curr++] != ' ') break;
-        if (data.data[curr++] != '[') break;
+        i8* line = &data.data[curr];
+        if (data.data[curr++] != '-') goto error;        
+        if (data.data[curr++] != ' ') goto error;
+        if (data.data[curr++] != '[') goto error;
 
-        bool8 delete = FALSE;
-        if (data.data[curr] == ' ') {
-            delete = TRUE;
-        } else if (data.data[curr] != 'X') {
-            break; //invalid format
+        bool8 delete = TRUE;
+        if (data.data[curr] == 'X') {
+            delete = FALSE;
+            curr++;
+        } else if (data.data[curr] == ' ') {
+            curr++;
         }
-        curr++;
 
-        if (data.data[curr++] != ']') break;
-        if (data.data[curr++] != ' ') break;
+        if (data.data[curr++] != ']') goto error;
+        if (data.data[curr++] != ' ') goto error;
         u32 com = -1;
         u32 l = StrtoU32((SString){.data = &data.data[curr], .len = data.len - curr}, &com);
         curr += l;
 
-        if (data.data[curr++] != '%') break;
+        if (data.data[curr++] != '%') goto error;
         while (curr < data.len && data.data[curr] != '(' && data.data[curr] != '\n') curr++;
-        if (data.data[curr] != '(') break;
+        if (data.data[curr] != '(') goto error;
         curr++;
 
         float priority = -1.0;
         curr += Strtofloat((SString){.data = &data.data[curr], .len = data.len - curr}, &priority);
 
 
-        if (data.data[curr++] != ')') break;
+        if (data.data[curr++] != ')') goto error;
 
         while (curr < data.len && data.data[curr] == ' ') curr++;
-        if (data.data[curr] == '\n') break;
+        if (data.data[curr] == '\n') goto error;
 
         SString name = {
             .data = &data.data[curr],
         };
 
-        while (curr < data.len && data.data[curr] != '\n') {
+        while (curr < data.len &&
+                data.data[curr] != ' ' &&
+                data.data[curr] != '\n' &&
+                data.data[curr] != ':') {
             curr++;
             name.len++;
         }
-        if (data.data[curr] != '\n') break;
 
-        printlog("Name: %s\tCom: %d\t Pr: %f\t Delete: %d\n", name, com, priority, delete);
+        //printlog("Name: %s\tCom: %d\t Pr: %f\t Delete: %d\n", name, com, priority, delete);
 
-        curr++;
+        if (delete) {
+            DeleteTodoName(ctx, name);
+        } else {
+            ScratchArena sc = ScratchArenaGet(a);
+            Todo t = GetTodoName(ctx, ArenaGetAllocator(sc.arena), name);
+            
+            DeleteTodoID(ctx, t.id);
+            t.id = AddTodo(ctx, name, t.body, priority, com);
+
+
+            //This code is terrible, and I hate it greatly.
+            //However the complexity comes from not using extra data, and also handling edge cases
+            //like if the file unexpectedly ends or there is a newline
+            //or if there is a malformed tag which we know is invalid
+            SString tag_name = {0};
+            if (data.data[curr] != '\n') {
+                while (1) {
+                    if (tag_name.data && tag_name.len && (curr >= data.len || data.data[curr] == ' ' || data.data[curr] == '\n')) {
+                        u64 tag_id = AddTag(ctx, tag_name);
+                        AddLink(ctx, t.id, tag_id);
+
+                        tag_name.len = 0;
+                        tag_name.data = NULL;
+
+                        if (data.data[curr] != '\n') curr++;
+                        continue;
+                    }
+
+                    if (curr >= data.len || data.data[curr] == '\n') {
+                        break;
+                    }
+
+                    if (data.data[curr] == ':') {
+                        curr++;
+                        tag_name.data = &data.data[curr];
+                        tag_name.len = 0;
+                        continue;
+                    }
+                    tag_name.len++;
+                    curr++;
+                }
+            }
+
+
+            ScratchArenaEnd(sc);
+        }
+
+skip_line:;
+          while (curr < data.len && data.data[curr] != '\n') curr++;
+          curr++;
+          continue;
+
+error:;
+          //do error stuff
+          if (err_tmp == NULL) {
+              const SString ErrorPrefix = sstring("Error: Format errors found on lines:\n");
+              *err = ArenaAlloc(a, ErrorPrefix.len);
+              memcpy(*err, ErrorPrefix.data, ErrorPrefix.len);
+              err_tmp = *err + ErrorPrefix.len;
+          }
+
+          SString errline = {
+              .data = line,
+              .len = 0,
+          };
+
+
+          while (line < &data.data[data.len - 1] && line[0] != '\n') {
+              line++;
+              errline.len++;
+          }
+
+          printlog("Hit: %s\n", errline);
+
+          ArenaExtendLast(a, errline.len + 2);
+          err_tmp[0] = '\t';
+          err_tmp++;
+
+          memcpy(err_tmp, errline.data, errline.len);
+          err_tmp += errline.len;
+
+          err_tmp[0] = '\n';
+          err_tmp++;
+
+          goto skip_line;
+    }
+
+    if (err_tmp) {
+          SString postfix = sstring(
+                  "The correct format is:\n"
+                  "- [Keep] Com% (Priority) todo_name"
+                  );
+
+          ArenaExtendLast(a, postfix.len);
+
+          memcpy(err_tmp, postfix.data, postfix.len);
+          err_tmp += postfix.len;
+
+          ArenaExtendLast(a, 1);
+          err_tmp[0] = 0;
     }
 
 
-
-
-    todo();
+    //todo();
 }
 
 TodoIter BeginTodoIter(TodoCtx* ctx, u64 todo) {
