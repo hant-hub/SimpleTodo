@@ -1,0 +1,1829 @@
+#include <core/cutils.h>
+
+#include <linux/limits.h>
+#include <stdarg.h>
+#include <stddef.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include <fcntl.h>
+#include <sys/stat.h>
+
+#include <unistd.h>
+
+#include <dirent.h>
+#include <ds/ds.h>
+
+#include <byteswap.h>
+
+// use platform threads in general case
+// required for stuff like printlog
+#include <pthread.h>
+
+/*
+    Mutex
+*/
+
+#include <limits.h>
+#include <linux/futex.h>
+#include <stdatomic.h>
+#include <sys/errno.h>
+#include <sys/syscall.h>
+
+// simple mutex based around Lambport's Bakery Algorithm
+// Atomics are used for checking whether to enter the mutex
+// and futex is used to sleep on wait
+
+typedef struct _Mutex_lock {
+    atomic_int lock;
+} _Mutex_lock;
+
+static inline int futex(u32* uaddr, int op, u32 val, const time_spec* timeout,
+                        u32* uaddr2, u32 val2) {
+    return syscall(SYS_futex, uaddr, op, val, timeout, uaddr2, val2);
+}
+
+// 0 -> unlocked
+// 1 -> locked
+// 2 -> waiters
+void MutexLock(Mutex* mutex) {
+    _Mutex_lock* m = (_Mutex_lock*)mutex;
+
+    while (1) {
+        int expected = 0;
+        bool8 success = atomic_compare_exchange_strong_explicit( &m->lock, &expected, 1, memory_order_acquire, memory_order_relaxed);
+        if (success) {
+            return;
+        }
+
+        if (expected != 2)
+            success = atomic_compare_exchange_strong_explicit( &m->lock, &expected, 2, memory_order_acquire, memory_order_relaxed);
+        if (success)
+            futex((u32*)&m->lock, FUTEX_WAIT_PRIVATE, 2, NULL, NULL, 0);
+    }
+}
+
+void MutexUnlock(Mutex* mutex) {
+    _Mutex_lock* m = (_Mutex_lock*)mutex;
+    // only wake if contention
+
+    int c = atomic_exchange_explicit(&m->lock, 0, memory_order_release);
+    if (c == 2)
+        futex((u32*)&m->lock, FUTEX_WAKE_PRIVATE, 1, NULL, NULL, 0);
+}
+
+typedef struct _Semaphore {
+    atomic_int v;
+    atomic_int waiting;
+} _Semaphore;
+
+void SemSet(Semaphore* sem, i32 size) {
+    _Semaphore* s = (_Semaphore*)sem;
+    atomic_store(&s->v, size);
+    //printlog("Sem: %d\n", atomic_load(&s->v));
+}
+
+void SemDown(Semaphore* sem) {
+    _Semaphore* s = (_Semaphore*)sem;
+
+    while (1) {
+        while (atomic_load(&s->v) < 1) {
+            atomic_fetch_add(&s->waiting, 1);
+            futex((u32*)&s->v, FUTEX_WAIT_PRIVATE, 0, NULL, NULL, 0);
+            atomic_fetch_add(&s->waiting, -1);
+        }
+
+        if (atomic_fetch_add(&s->v, -1) >= 1) {
+            return;
+        }
+        atomic_fetch_add(&s->v, 1);
+    }
+}
+
+void SemUp(Semaphore* sem) {
+    _Semaphore* s = (_Semaphore*)sem;
+    atomic_fetch_add(&s->v, 1);
+    if (atomic_load(&s->waiting)) {
+        futex((u32*)&s->v, FUTEX_WAKE_PRIVATE, 1, NULL, NULL, 0);
+    }
+}
+
+void SemAdd(Semaphore* sem, u32 num) {
+    _Semaphore* s = (_Semaphore*)sem;
+    atomic_fetch_add(&s->v, num);
+    if (atomic_load(&s->waiting)) {
+        futex((u32*)&s->v, FUTEX_WAKE_PRIVATE, num, NULL, NULL, 0);
+    }
+}
+
+typedef struct _RWLock {
+    Mutex m;
+
+    Semaphore write;
+    Semaphore read;
+
+    atomic_int num_pending;
+    atomic_int num_departing; //works for nproc < 127
+} _RWLock;
+
+const u32 max_readers = 1 << 30;
+
+void RWLockWrite(RWLock* mutex) {
+    _RWLock* m = (_RWLock*)mutex;
+    MutexLock(&m->m);
+
+    i32 r = atomic_fetch_add(&m->num_pending, -max_readers);
+    if (r && (atomic_fetch_add(&m->num_departing, r) + r)) {
+        SemDown(&m->write);
+    }
+
+}
+
+void RWLockRead(RWLock* mutex) {
+    _RWLock* m = (_RWLock*)mutex;
+    if (atomic_fetch_add(&m->num_pending, 1) + 1 < 0) {
+        SemDown(&m->read);
+    }
+}
+
+void RWUnlockWrite(RWLock* mutex) {
+    _RWLock* m = (_RWLock*)mutex;
+    
+    i32 r = atomic_fetch_add(&m->num_pending, max_readers) + max_readers;
+    SemAdd(&m->read, r);
+
+    MutexUnlock(&m->m);
+}
+
+void RWUnlockRead(RWLock* mutex) {
+    _RWLock* m = (_RWLock*)mutex;
+    if (atomic_fetch_add(&m->num_pending, -1) - 1 < 0) {
+        if (atomic_fetch_add(&m->num_departing, -1) == 1) {
+            SemUp(&m->write);
+        }
+    }
+}
+
+
+/*
+    Endian Utilities
+*/
+u16 FlipEndian16(u16 i) { return bswap_16(i); }
+u32 FlipEndian32(u32 i) { return bswap_32(i); }
+u64 FlipEndian64(u64 i) { return bswap_64(i); }
+
+f32 FlipEndianF(f32 f) { return bswap_32(f); }
+
+f64 FlipEndianD(f64 f) { return bswap_64(f); }
+
+/*
+    Memory Allocators
+*/
+static alloc_func_def(globalAllocator) {
+
+    if (!new) {
+        // free
+        free(ptr);
+        return NULL;
+    }
+
+    if (!ptr && !old) {
+        // alloc
+        return malloc(new);
+    }
+
+    // realloc
+    return realloc(ptr, new);
+}
+const Allocator GlobalAllocator = {
+    .a = globalAllocator,
+};
+
+typedef enum Block_status { BLOCK_FREE, BLOCK_USED } Block_status;
+
+// block allocator
+BlockAllocator BlockCreate(Allocator a, u64 size) {
+    u64 newsize = (size / sizeof(MemBlock)) + 1;
+    BlockAllocator b =
+        Alloc(a, sizeof(BlockAllocator) + sizeof(MemBlock) * newsize);
+    b->a = a;
+    b->cap = newsize;
+    b->head = &b->data[0];
+    b->data[0].next = NULL;
+    b->data[0].size = newsize * sizeof(MemBlock) - sizeof(u64);
+    return b;
+}
+
+void* BlockAlloc(BlockAllocator a, u64 size) {
+    size += sizeof(MemBlock) - (size % sizeof(MemBlock));
+
+    // first fit
+    MemBlock* prev = NULL;
+    MemBlock* curr = a->head;
+    while (curr && curr->size < size) {
+        prev = curr;
+        curr = curr->next;
+    }
+
+    // no space
+    if (!curr)
+        return NULL;
+
+    u32 rem_size = curr->size - size;
+    if (rem_size < sizeof(MemBlock)) {
+        // block size is 'close enough'
+        if (prev) {
+            prev->next = curr->next;
+        } else {
+            a->head = curr->next;
+        }
+
+        return &curr->next;
+    }
+
+    // split block
+    u32 mov = sizeof(u64) + size;
+    MemBlock* new_block = (MemBlock*)(((u8*)curr) + mov);
+
+    new_block->size = (rem_size - sizeof(u64));
+    new_block->next = curr->next;
+
+    if (prev) {
+        prev->next = new_block;
+    } else {
+        a->head = new_block;
+    }
+
+    curr->size = size;
+    return &curr->next;
+}
+
+void* BlockAllocZero(BlockAllocator a, u64 size) {
+    void* p = BlockAlloc(a, size);
+    memset(p, 0, size);
+    return p;
+}
+
+void BlockFree(BlockAllocator a, void* p) {
+    MemBlock* block = (MemBlock*)(p - offsetof(MemBlock, next));
+
+    // do coalescence
+    MemBlock* before = a->head;
+    while (before->next && before->next <= block) { before = before->next; }
+
+    MemBlock* after = NULL;
+    if (before->next > block) {
+        after = before->next;
+    }
+
+    if (before > block) {
+        after = before;
+        before = NULL;
+    }
+
+    // check if before is contiguous
+    u8* b = (u8*)before;
+    if (before && ((u8*)block) == b + before->size + sizeof(u64)) {
+        // combine
+        before->size += block->size + sizeof(u64);
+        block = before;
+    } else if (before) {
+        block->next = before->next;
+        before->next = block;
+    }
+
+    // check if after is contiguous
+    b = (u8*)block;
+    if ((u8*)after == (b + block->size + sizeof(u64))) {
+        // combine
+        block->next = after->next;
+        block->size += after->size + sizeof(u64);
+
+    } else {
+        block->next = after;
+    }
+
+    if (after == a->head) {
+        a->head = block;
+    }
+
+    return;
+}
+
+void BlockDestroy(BlockAllocator a) {
+    Free(a->a, a, sizeof(BlockAllocator) + sizeof(MemBlock) * a->cap);
+}
+
+// Stack Allocator
+StackAllocator StackCreate(Allocator a, u64 size) {
+    StackAllocator s = Alloc(a, sizeof(struct StackAllocator) + size);
+    memset(s, 0, sizeof(struct StackAllocator) + size);
+    s->cap = size;
+
+    return s;
+}
+
+void StackDestroy(Allocator a, StackAllocator s) {
+    Free(a, s, s->cap + sizeof(struct StackAllocator));
+}
+
+void* StackAlloc(StackAllocator s, u64 size) {
+    if (s->size + size > s->cap)
+        return NULL;
+    void* out = &s->data[s->size];
+    s->size += size;
+
+    return out;
+}
+
+void StackSet(StackAllocator s, u64 pos) {
+    if (pos > s->cap)
+        return;
+    s->size = pos;
+}
+
+void StackReset(StackAllocator s) { s->size = 0; }
+
+// Dynamic Arena Allocator
+ArenaAllocator ArenaCreate(Allocator a, u64 size) {
+    ArenaAllocator arena = Alloc(a, size + sizeof(struct ArenaAllocator));
+
+    // use prev pointer to store whether to dynamically grow
+    *arena = (struct ArenaAllocator){
+        .a = a,
+        .cap = size,
+        .size = 0,
+    };
+
+    return arena;
+}
+
+u64 ArenaGetPos(ArenaAllocator a) { return a->size; }
+
+static alloc_func_def(arena_alloc) {
+    if (!new) {
+        // free
+        // Arena's don't free, do nothing
+        return NULL;
+    }
+
+    if (!ptr && !old) {
+        // alloc
+        return ArenaAlloc(ctx, new);
+    }
+
+    // realloc
+    // Just alloc again because no free
+    return ArenaAlloc(ctx, new);
+}
+
+Allocator ArenaGetAllocator(ArenaAllocator a) {
+    return (Allocator){
+        .a = arena_alloc,
+        .ctx = a,
+    };
+}
+
+void* ArenaAlloc(ArenaAllocator arena, u64 size) {
+    ArenaAllocator a = arena;
+    if (size + a->size > (a->cap)) {
+        return NULL;
+    }
+
+    void* p = &a->data[a->size];
+    a->size += size;
+    return p;
+}
+
+u64 ArenaExtendLast(ArenaAllocator arena, u64 size) {
+    ArenaAllocator a = arena;
+    if (size + a->size > (a->cap)) {
+        return 0;
+    }
+    a->size += size;
+    return size;
+}
+
+void* ArenaAllocZero(ArenaAllocator a, u64 size) {
+    void* p = ArenaAlloc(a, size);
+    if (p)
+        memset(p, 0, size);
+    return p;
+}
+
+void ArenaPop(ArenaAllocator arena, u64 size) {
+    ArenaAllocator a = arena;
+    if (size > a->size) {
+        a->size = 0;
+    } else {
+        a->size -= size;
+    }
+}
+
+void ArenaSetPos(ArenaAllocator a, u64 pos) {
+    u64 diff = a->size - pos;
+    ArenaPop(a, diff);
+}
+
+void ArenaClear(ArenaAllocator a) { a->size = 0; }
+
+void ArenaDestroy(ArenaAllocator s) {
+    Free(s->a, s, s->cap + sizeof(struct ArenaAllocator));
+}
+
+ScratchArena ScratchArenaBegin(ArenaAllocator a) {
+    return (ScratchArena){.arena = a, .base = ArenaGetPos(a)};
+}
+
+void ScratchArenaEnd(ScratchArena s) { ArenaSetPos(s.arena, s.base); }
+
+static struct ArenaBlock* MemBlockAlloc(Allocator a, u64 size) {
+    struct ArenaBlock* new_block = Alloc(a, sizeof(struct ArenaBlock) + size);
+    if (!new_block)
+        return NULL;
+    *new_block = (struct ArenaBlock){0};
+    return new_block;
+}
+
+DynArena DynArenaCreate(Allocator a, u64 min_size) {
+    DynArena d = {.a = a, .head = MemBlockAlloc(a, min_size)};
+
+    assert(d.head); // no reason to fail to create an arena
+    return d;
+}
+void* DynArenaAlloc(DynArena* d, u64 size) {
+    struct ArenaBlock* m = d->head;
+    if (!m || m->size + size >= m->cap) {
+        // prepend new block
+        u64 nextsize = size * 2;
+        while (size >= nextsize) nextsize <<= 1;
+
+        struct ArenaBlock* new_block = MemBlockAlloc(d->a, nextsize);
+        if (!new_block) {
+            return NULL; // out of memory error
+        }
+
+        d->head = new_block;
+        new_block->prev = m;
+        m = new_block;
+    }
+
+    void* out = &m->data[m->size];
+    m->size += size;
+    return out;
+}
+
+void* DynArenaAllocZero(DynArena* d, u64 size) {
+    void* res = DynArenaAlloc(d, size);
+    if (res) {
+        memset(res, 0, size);
+    }
+    return res;
+}
+void DynArenaDestroy(DynArena d) {
+    struct ArenaBlock* curr = d.head;
+    while (curr) {
+        struct ArenaBlock* p = curr;
+        curr = curr->prev;
+        Free(d.a, p, sizeof(struct ArenaBlock) + p->cap);
+    }
+    d.head = NULL;
+}
+
+// Should never live longer than a single
+// function call.
+
+static __thread ArenaAllocator a = 0;
+static __thread ArenaAllocator b = 0;
+
+static void FreeArenas() {
+    ArenaDestroy(a);
+    ArenaDestroy(b);
+}
+
+ScratchArena ScratchArenaGet(ArenaAllocator persist) {
+    if (!a) {
+        a = ArenaCreate(GlobalAllocator, MB(200L));
+        b = ArenaCreate(GlobalAllocator, MB(200L));
+        atexit(FreeArenas);
+    }
+
+    if (persist == a) {
+        return ScratchArenaBegin(b);
+    }
+    return ScratchArenaBegin(a);
+}
+
+/*
+    String Implementations
+*/
+
+bool8 Sstrcmp(SString a, SString b) {
+    return (a.len == b.len) && (memcmp(a.data, b.data, a.len) == 0);
+}
+
+SString Sstrdup(Allocator a, SString str) {
+    SString new = {
+        .len = str.len,
+        .data = Alloc(a, str.len),
+    };
+
+    memcpy(new.data, str.data, str.len);
+    return new;
+}
+
+SString Sstrtok(SString str, const char delim) {
+    static SString buffer = {0};
+
+    if (str.len) {
+        buffer = str;
+    }
+
+    if (!buffer.len)
+        return (SString){0};
+
+    SString tok = {.data = buffer.data};
+    while (buffer.len) {
+        char c = buffer.data[0];
+        if (c == delim) {
+            break;
+        }
+
+        buffer.data++;
+        buffer.len--;
+
+        tok.len++;
+    }
+
+    buffer.data++;
+    if (buffer.len)
+        buffer.len--;
+
+    return tok;
+}
+
+char* SStringGetCstr(SString s, ArenaAllocator a) {
+    char* cstr = ArenaAlloc(a, s.len + 1);
+    memcpy(cstr, s.data, s.len);
+    cstr[s.len] = 0;
+    return cstr;
+}
+
+u32 Strtofloat(SString str, float* out) {
+    i8 sign = 1;
+    u32 curr = 0; 
+    u32 whole = 0;
+
+    //sign
+    if (str.data[curr] == '-' && isNum(str.data[curr + 1])) {
+        sign = -1;
+        curr++;
+    }
+
+    //integer part
+    while (curr < str.len && isNum(str.data[curr])) {
+        whole *= 10;
+        whole += str.data[curr] - '0';
+        curr++;
+    }
+
+    *out = whole;
+    if (str.data[curr] != '.') {
+        return curr;
+    }
+
+    curr++;
+
+    double frac = 0.0;
+    double mult = 0.1;
+
+    //fractional part
+    while (curr < str.len && isNum(str.data[curr])) {
+        frac += mult * (str.data[curr] - '0');
+        mult /= 10.0;
+        curr++;
+    }
+
+    *out += frac;
+    *out *= (float)sign;
+    return curr;
+}
+
+u32 StrtoU32(SString str, u32* out) {
+    u32 curr = 0; 
+    u32 whole = 0;
+
+    //integer part
+    while (curr < str.len && isNum(str.data[curr])) {
+        whole *= 10;
+        whole += str.data[curr] - '0';
+        curr++;
+    }
+
+    *out = whole;
+    return curr;
+}
+
+i32 StrtoI32(SString str, i32* out) {
+    i8 sign = 1;
+    u32 curr = 0; 
+    u32 whole = 0;
+
+    //sign
+    if (str.data[curr] == '-' && isNum(str.data[curr + 1])) {
+        sign = -1;
+        curr++;
+    }
+
+    //integer part
+    while (curr < str.len && isNum(str.data[curr])) {
+        whole *= 10;
+        whole += str.data[curr] - '0';
+        curr++;
+    }
+
+    *out = whole;
+    *out *= (i32)sign;
+    return curr;
+}
+
+/*
+    File Implementations
+    Platform Dependent
+*/
+
+
+//Recursive mkdir, don't try to create infinite dir
+//chain, that is stupid.
+//
+//This is currently a recursive function, so don't
+//call it in a hot loop.
+bool8 mkdirRec(const SString dirname) {
+    file f = filestat(dirname);
+    if (f.stats.size) {
+        return 0;
+    }
+
+    SString popped = filepathpopdir(dirname);
+    if (popped.len != 0) {
+        bool8 failure = mkdirRec(popped);
+        if (failure) return failure;
+    }
+
+    ScratchArena sc = ScratchArenaGet(NULL);
+
+    char* buf = ArenaAllocZero(sc.arena, dirname.len + 1);
+    memcpy(buf, dirname.data, dirname.len);
+    //printlog("mkdir: %n\n", buf);
+
+    int res = mkdir(buf, 0777);
+    //if (res) {
+    //    printlog("Error: %n\n", strerror(errno));
+    //}
+
+    ScratchArenaEnd(sc);
+
+    return res;
+}
+
+file fileopen(const SString filename, file_permissions p) {
+
+    int oflags = O_RDONLY;
+
+    if ((p & FILE_WRITE) && (p & FILE_READ)) {
+        oflags |= O_RDWR;
+    } else if (p & FILE_WRITE) {
+        oflags |= O_WRONLY;
+    }
+
+    if (p & FILE_CREAT) {
+        oflags |= O_CREAT;
+    }
+
+    if (p & FILE_TRUNC) {
+        oflags |= O_TRUNC;
+    }
+
+    // INFO(ELI): We use a buffer here since SString is not garunteed to be
+    // Null terminated. It usually is, but it may not be.
+    char buf[PATH_MAX + 1] = {0};
+    memcpy(buf, filename.data, filename.len);
+    int fd = open(buf, oflags, 0666);
+
+    struct stat statbuf;
+    if (fd < 0 || fstat(fd, &statbuf)) {
+        // error here
+        // TODO(ELI): Once logging is working,
+        // make log error and return invalid file
+        debugerr("Failed to Open file: %s %d", filename, fd);
+
+        return (file){.handle = -1};
+    }
+
+    return (file){
+        .handle = fd,
+        .stats =
+            {
+                .size = statbuf.st_size,
+                .modified =
+                    {
+                        .s = statbuf.st_mtim.tv_sec,
+                        .ns = statbuf.st_mtim.tv_nsec,
+                    },
+                .access =
+                    {
+                        .s = statbuf.st_atim.tv_sec,
+                        .ns = statbuf.st_atim.tv_nsec,
+                    },
+            },
+    };
+}
+
+file filestat(const SString filename) {
+    ScratchArena sc = ScratchArenaGet(NULL);
+
+    char* const data = ArenaAllocZero(sc.arena, filename.len + 1);
+    memcpy(data, filename.data, filename.len);
+
+    struct stat statbuf;
+    if (stat(data, &statbuf)) {
+        ScratchArenaEnd(sc);
+        return (file){.handle = -1};
+    }
+
+    ScratchArenaEnd(sc);
+
+    return (file){
+        .handle = -1,
+        .stats =
+            {
+                .size = statbuf.st_size,
+                .modified =
+                    {
+                        .s = statbuf.st_mtim.tv_sec,
+                        .ns = statbuf.st_mtim.tv_nsec,
+                    },
+                .access =
+                    {
+                        .s = statbuf.st_atim.tv_sec,
+                        .ns = statbuf.st_atim.tv_nsec,
+                    },
+            },
+    };
+}
+
+static u64 flushdata(u64 handle, SString src) {
+    u64 size = src.len;
+    char* buffer = (char*)src.data;
+    u64 accum = 0;
+
+    while (accum != size) {
+        u64 bytes = write(handle, buffer + accum, size - accum);
+
+        if (bytes < 0) {
+            // error
+            panic();
+        }
+
+        if (bytes == 0) {
+            // EOF
+            break;
+        }
+
+        accum += bytes;
+    }
+
+    return accum;
+}
+
+void fileclose(file file) {
+    if (file.buffered && file.accum) {
+        flushdata(file.handle, (SString){.len = file.accum, .data = file.buf});
+    }
+
+    if (!file.closefd)
+        close(file.handle);
+}
+
+u64 fileread(SString dst, file src) {
+    u64 size = dst.len;
+    char* buffer = (char*)dst.data;
+
+    u64 accum = 0;
+
+    while (accum != size) {
+        i64 bytes = read(src.handle, buffer, size);
+        if (bytes < 0) {
+            // error
+            panic();
+        }
+
+        if (bytes == 0) {
+            // EOF
+            break;
+        }
+
+        accum += bytes;
+    }
+
+    return accum;
+}
+
+u64 filewrite(file* dst, SString src) {
+    u64 size = src.len;
+    char* buffer = (char*)src.data;
+
+    if (!dst->buffered) {
+        return flushdata(dst->handle, src);
+    } else {
+        for (u64 i = 0; i < size; i++) {
+            if (dst->accum >= PAGE_SIZE) {
+                dst->accum = 0;
+                flushdata(dst->handle,
+                          (SString){.len = PAGE_SIZE, .data = dst->buf});
+            }
+
+            dst->buf[dst->accum++] = buffer[i];
+        }
+
+        return size;
+    }
+}
+
+void fileflush(file* file) {
+    if (file->buffered && file->accum) {
+        flushdata(file->handle,
+                  (SString){.len = file->accum, .data = file->buf});
+        file->accum = 0;
+    }
+}
+
+u64 fileload(SString handle, const SString filename) {
+    file f = fileopen(filename, FILE_READ);
+    if (f.handle == -1)
+        return 0;
+    u64 size = fileread(handle, f);
+    fileclose(f);
+    return size;
+}
+
+u64 filesave(const SString filename, SString handle) {
+    file f = fileopen(filename, FILE_WRITE | FILE_TRUNC | FILE_CREAT);
+    if (f.handle == -1)
+        return 0;
+    u64 size = filewrite(&f, handle);
+    fileclose(f);
+    return size;
+}
+
+void filedelete(SString filename) {
+    char buf[PATH_MAX + 1] = {0};
+    sformat((SString){.len = PATH_MAX, .data = (i8*)buf}, "%s", filename);
+    remove(buf);
+}
+
+void setdir(SString dir) {
+    char buf[PATH_MAX + 1] = {0};
+    sformat((SString){.len = PATH_MAX, .data = (i8*)buf}, "%s", dir);
+    chdir(buf);
+}
+
+void setdirExe() {
+    char tmp[PATH_MAX] = {0};
+    if (readlink("/proc/self/exe", tmp, PATH_MAX) < 0) {
+        debugerr("Error: Failed to find Build Binary");
+        exit(-1);
+    }
+
+    char* cursor = tmp;
+    while (cursor[0]) cursor++;
+    while (cursor > tmp && cursor[0] != '/') cursor--;
+    cursor[0] = 0;
+
+    chdir(tmp);
+}
+
+SString filepathpopdir(SString filepath) {
+    SString out = filepath;
+    while (out.len && out.data[out.len - 1] != '/') { out.len--; }
+    if (out.len)
+        out.len--;
+
+    if (out.len <= 0)
+        return (SString){0};
+
+    return out;
+}
+
+
+SString filepathstripdir(SString filepath) {
+    SString out = filepath;
+
+    while (out.len && out.data[out.len - 1] != '/') { out.len--; }
+
+    if (!out.len)
+        return filepath;
+
+    out.len++;
+    out.data = &filepath.data[out.len - 1];
+    out.len = filepath.len - (out.len - 1);
+
+    return out;
+}
+
+SString filepathbasename(SString filepath) {
+    SString out = filepath;
+
+    while (out.len && out.data[out.len - 1] != '.') { out.len--; }
+
+    if (!out.len)
+        return filepath;
+
+    out.data = filepath.data;
+    out.len = out.len - 1;
+
+    return out;
+}
+
+SString filepathext(SString filepath) {
+    SString out = filepath;
+
+    while (out.len && out.data[out.len - 1] != '.') { out.len--; }
+
+    if (!out.len)
+        return (SString){0};
+
+    out.data = &filepath.data[out.len - 1];
+    out.len = filepath.len - (out.len - 1);
+
+    return out;
+}
+
+u32 filepathdepth(SString filepath) {
+    u32 depth = 0;
+    u32 i = 0;
+
+    if (filepath.data[i] == '.' && filepath.data[i + 1] == '/') {
+        i += 2;
+    }
+
+    for (; i < filepath.len; i++) {
+        if (filepath.data[i] == '/')
+            depth++;
+    }
+
+    return depth;
+}
+
+/*
+    Custom Format
+*/
+
+typedef void (*wchar)(char c, void* ctx);
+
+typedef struct formatInfo {
+    wchar f;
+    void* ctx;
+} formatInfo;
+
+// 10^{i + 1}
+static const u64 power10plus[] = {
+    1UL,
+    10UL,
+    100UL,
+    1000UL,
+    10000UL,
+    100000UL,
+    1000000UL,
+    10000000UL,
+    100000000UL,
+    1000000000UL,
+    10000000000UL,
+    100000000000UL,
+    1000000000000UL,
+    10000000000000UL,
+    100000000000000UL,
+    1000000000000000UL,
+    10000000000000000UL,
+    100000000000000000UL,
+    1000000000000000000UL,
+    10000000000000000000UL,
+};
+
+#define ERROL_EPS 0.0000001
+
+static v2d hpnormalize(v2d x) {
+    f64 val = x.x;
+    x.x += x.y;
+    x.y += val - x.x;
+
+    return x;
+}
+
+static v2d hpmul10(v2d x) {
+    f64 off, val = x.x;
+
+    x.x *= 10.0;
+    x.y *= 10.0;
+
+    off = x.x;
+    off -= val * 8.0;
+    off -= val * 2.0;
+
+    x.y -= off;
+    return hpnormalize(x);
+}
+
+static v2d hpdiv10(v2d x) {
+    f64 val = x.x;
+
+    x.x /= 10.0;
+    x.y /= 10.0;
+
+    val -= x.x * 8.0;
+    val -= x.x * 2.0;
+
+    x.y += val / 10.0;
+
+    return hpnormalize(x);
+}
+
+static f64 fpnext(f64 x) {
+    union {
+        f64 f;
+        u64 i;
+    } bits;
+    bits.f = x;
+
+    bits.i++;
+    return bits.f;
+}
+
+static f64 fpprev(f64 x) {
+    union {
+        f64 f;
+        u64 i;
+    } bits;
+    bits.f = x;
+
+    bits.i--;
+    return bits.f;
+}
+
+#include <float.h>
+
+// Based on the implementation of the Errol0
+// algorithm provided by the original paper.
+static void format_float(formatInfo info, f64 num) {
+    if (num < 0) {
+        info.f('-', info.ctx);
+        num *= -1.0;
+    }
+
+    if (num >= FLT_MAX) {
+        info.f('i', info.ctx);
+        info.f('n', info.ctx);
+        info.f('f', info.ctx);
+        return;
+    }
+
+    if (num == 0.0) {
+        info.f('0', info.ctx);
+        info.f('.', info.ctx);
+        info.f('0', info.ctx);
+        return;
+    }
+
+    f64 ten = 1.0;
+    i32 exp = 1;
+    v2d mid, inhi, inlo;
+
+    mid.x = num;
+    mid.y = 0.0;
+
+    while (((mid.x > 10.0) || ((mid.x == 10.0) && (mid.y >= 0.0))) &&
+           (exp < 308))
+        exp++, mid = hpdiv10(mid), ten /= 10.0;
+
+    while (((mid.x < 1.0) || ((mid.x == 1.0) && (mid.y < 0.0))) && (exp > -307))
+        exp--, mid = hpmul10(mid), ten *= 10.0;
+
+    inhi.x = mid.x;
+    inhi.y = mid.y + (fpnext(num) - num) * ten / (2.0 + ERROL_EPS);
+
+    inlo.x = mid.x;
+    inlo.y = mid.y + (fpprev(num) - num) * ten / (2.0 + ERROL_EPS);
+
+    inhi = hpnormalize(inhi);
+    inlo = hpnormalize(inlo);
+
+    while (inhi.x > 10.0 || (inhi.x == 10.0 && (inhi.y >= 0.0)))
+        exp++, inhi = hpdiv10(inhi), inlo = hpdiv10(inlo);
+
+    while (inhi.x < 1.0 || (inhi.x == 1.0 && (inhi.y < 0.0)))
+        exp--, inhi = hpmul10(inhi), inlo = hpmul10(inlo);
+
+    if (exp <= 0) {
+        info.f('0', info.ctx);
+        i32 shift = exp;
+        if (shift < 0)
+            info.f('.', info.ctx);
+
+        while (shift < 0) {
+            shift++;
+            info.f('0', info.ctx);
+        }
+    }
+
+    while (inhi.x != 0.0 || inhi.y != 0.0) {
+        exp--;
+        if (exp == -1) {
+            info.f('.', info.ctx);
+            continue;
+        }
+
+        u8 ldig, hdig = 0;
+
+        hdig = (u8)(inhi.x);
+        if ((inhi.x == hdig) && (inhi.y < 0))
+            hdig -= 1;
+
+        ldig = (u8)(inlo.x);
+        if ((inlo.x == ldig) && (inlo.y < 0))
+            ldig -= 1;
+
+        if (ldig != hdig)
+            break;
+
+        // printf("digit: %d %d\n", hdig, ldig);
+        info.f(hdig + '0', info.ctx);
+
+        inhi.x -= hdig;
+        inhi = hpmul10(inhi);
+
+        inlo.x -= ldig;
+        inlo = hpmul10(inlo);
+    }
+
+    f64 mdig = (inhi.x + inlo.x) / 2.0 + 0.5;
+    info.f((u8)mdig + '0', info.ctx);
+}
+
+static ptrdiff_t format_arg(formatInfo info, va_list* args,
+                            const char* format) {
+    ptrdiff_t out = 0;
+    switch (format[0]) {
+    case '%': {
+        info.f(format[0], info.ctx);
+        out++;
+    } break;
+    case 'd': {
+        i64 s = va_arg((*args), i32);
+        if (s < 0) {
+            info.f('-', info.ctx);
+            s *= -1;
+        }
+        u64 num = s;
+
+        if (num == 0) {
+            info.f('0', info.ctx);
+            out++;
+            break;
+        }
+
+        // calc number of digits
+        u32 digits = 0;
+        for (u32 i = 0; i < ARRAY_SIZE(power10plus); i++) {
+            if ((num / power10plus[i]) == 0UL)
+                break;
+            digits++;
+        }
+
+        // print digits
+        for (i32 i = digits - 1; i >= 0; i--) {
+            u32 digit = num / power10plus[i];
+            num -= digit * power10plus[i];
+            info.f(digit + '0', info.ctx);
+        }
+
+        out++;
+    } break;
+    case 'u': {
+        u64 num = va_arg((*args), u32);
+
+        if (num == 0) {
+            info.f('0', info.ctx);
+            out++;
+            break;
+        }
+
+        // calc number of digits
+        u32 digits = 0;
+        for (u32 i = 0; i < ARRAY_SIZE(power10plus); i++) {
+            if ((num / power10plus[i]) == 0UL)
+                break;
+            digits++;
+        }
+
+        // print digits
+        for (i32 i = digits - 1; i >= 0; i--) {
+            u32 digit = num / power10plus[i];
+            num -= digit * power10plus[i];
+            info.f(digit + '0', info.ctx);
+        }
+
+        out++;
+    } break;
+    case 'l': {
+        i64 s = va_arg((*args), i64);
+        if (s < 0) {
+            info.f('-', info.ctx);
+            s *= -1;
+        }
+        u64 num = s;
+
+        if (num == 0) {
+            info.f('0', info.ctx);
+            out++;
+            break;
+        }
+
+        // calc number of digits
+        u32 digits = 0;
+        for (u32 i = 0; i < ARRAY_SIZE(power10plus); i++) {
+            if ((num / power10plus[i]) == 0UL)
+                break;
+            digits++;
+        }
+
+        // print digits
+        for (i32 i = digits - 1; i >= 0; i--) {
+            u32 digit = num / power10plus[i];
+            num -= digit * power10plus[i];
+            info.f(digit + '0', info.ctx);
+        }
+
+        out++;
+    } break;
+    case 'f': {
+        f64 s = va_arg((*args), f64);
+        format_float(info, s);
+        out++;
+    } break;
+    case 's': {
+        SString s = va_arg((*args), SString);
+        for (u32 i = 0; i < s.len; i++) { info.f(s.data[i], info.ctx); }
+        out++;
+    } break;
+    case 'c': {
+        int c = va_arg((*args), int);
+        info.f(c, info.ctx);
+        out++;
+    } break;
+    case 'n': {
+        const char* s = va_arg((*args), const char*);
+        while (s[0]) {
+            info.f(s[0], info.ctx);
+            s++;
+        }
+        out++;
+    } break;
+    case 'x': {
+        u64 num = va_arg((*args), u64);
+
+        if (num == 0) {
+            info.f('0', info.ctx);
+            out++;
+            break;
+        }
+
+        // calc number of digits
+        u32 digits = 0;
+        u64 hexpower = 1;
+        u8 leading_bits = __builtin_clzll(num);
+
+        digits = ((16 - leading_bits / 4));
+        hexpower <<= (digits - 1) * 4;
+
+        // for (u32 i = 0; i < ARRAY_SIZE(power10plus); i++) {
+        //     if ((num / hexpower) == 0UL)
+        //         break;
+        //     digits++;
+        //     hexpower <<= 4; // multiply by 16
+        // }
+        // hexpower >>= 4;
+
+        // print digits
+        for (i32 i = digits - 1; i >= 0; i--) {
+            u32 digit = num / hexpower;
+            num -= digit * hexpower;
+            if (digit < 10)
+                info.f(digit + '0', info.ctx);
+            else
+                info.f(digit + 'a' - 10, info.ctx);
+
+            hexpower >>= 4; // divide by 16
+        }
+
+        out++;
+    } break;
+    default: {
+        todo();
+    }
+    }
+    return out;
+}
+
+static void vformat(formatInfo info, va_list* args, const char* format) {
+
+    while (format[0]) {
+        switch (format[0]) {
+        case '%':
+            format++;
+            format += format_arg(info, args, format);
+            break;
+        default: {
+            info.f(format[0], info.ctx);
+            format++;
+        } break;
+        }
+    }
+}
+
+typedef struct strInfo {
+    SString data;
+    u32 idx;
+} strInfo;
+
+static void strput(char c, void* ctx) {
+    strInfo* info = ctx;
+    if (info->data.len > info->idx)
+        info->data.data[info->idx++] = c;
+}
+
+u32 sformat(SString dst, const char* format, ...) {
+    strInfo info = {.data = dst, .idx = 0};
+
+    formatInfo finfo = {
+        .ctx = &info,
+        .f = strput,
+    };
+
+    va_list args;
+    va_start(args, format);
+
+    vformat(finfo, &args, format);
+
+    va_end(args);
+
+    return info.idx;
+}
+
+typedef struct fileInfo {
+    file* dst;
+    u64 idx;
+} fileInfo;
+
+static void fileput(char c, void* ctx) {
+    fileInfo* info = ctx;
+    info->idx++;
+    filewrite(info->dst, (SString){.len = 1, .data = (i8*)&c});
+}
+
+u32 fformat(file* dst, const char* format, ...) {
+    fileInfo info = {
+        .dst = dst,
+    };
+
+    formatInfo finfo = {
+        .ctx = &info,
+        .f = fileput,
+    };
+
+    va_list args;
+    va_start(args, format);
+    vformat(finfo, &args, format);
+    va_end(args);
+    return info.idx;
+}
+
+file stdout_file = {
+    .handle = STDOUT_FILENO,
+    .buffered = 1,
+    .closefd = 1,
+};
+
+file* logfile = &stdout_file;
+file* warnfile = &stdout_file;
+file* errfile = &stdout_file;
+
+void flush_log(void) { fileflush(logfile); }
+
+u32 printlog(const char* format, ...) {
+    if (logfile->thread_safe)
+        MutexLock(&logfile->m);
+
+    static bool8 schedule_flush = FALSE;
+    if (!schedule_flush) {
+        schedule_flush = TRUE;
+        atexit(flush_log);
+    }
+
+    fileInfo info = {
+        .dst = logfile,
+    };
+
+    formatInfo finfo = {
+        .ctx = &info,
+        .f = fileput,
+    };
+
+    va_list args;
+    va_start(args, format);
+    vformat(finfo, &args, format);
+    va_end(args);
+
+    if (logfile->thread_safe)
+        MutexUnlock(&logfile->m);
+    return info.idx;
+}
+
+u32 printwarn(const char* format, ...) {
+    if (warnfile->thread_safe)
+        MutexLock(&warnfile->m);
+
+    fileInfo info = {
+        .dst = warnfile,
+    };
+
+    formatInfo finfo = {
+        .ctx = &info,
+        .f = fileput,
+    };
+
+    va_list args;
+    va_start(args, format);
+    vformat(finfo, &args, format);
+    va_end(args);
+
+    if (warnfile->thread_safe)
+        MutexUnlock(&warnfile->m);
+    return info.idx;
+}
+
+u32 printerr(const char* format, ...) {
+    if (errfile->thread_safe)
+        MutexLock(&errfile->m);
+
+    fileInfo info = {
+        .dst = errfile,
+    };
+
+    formatInfo finfo = {
+        .ctx = &info,
+        .f = fileput,
+    };
+
+    va_list args;
+    va_start(args, format);
+    vformat(finfo, &args, format);
+    va_end(args);
+
+    if (errfile->thread_safe)
+        MutexUnlock(&errfile->m);
+    return info.idx;
+}
+
+// Directory Stuff
+
+static DIR* dirpn = NULL;
+
+void DirBegin(SString filepath) {
+    char buf[PATH_MAX + 1] = {0};
+    memcpy(buf, filepath.data, filepath.len);
+    dirpn = opendir(buf);
+}
+
+SString DirNext(DirType* t) {
+    if (!dirpn)
+        return (SString){0};
+
+    struct dirent* d = NULL;
+    d = readdir(dirpn);
+
+    *t = T_END;
+    if (!d) {
+        closedir(dirpn);
+        return (SString){0};
+    }
+
+    if (d->d_type == DT_DIR)
+        *t = T_DIR;
+    else if (d->d_type == DT_REG)
+        *t = T_FILE;
+    else
+        *t = T_UNKNOWN;
+
+    return (SString){.data = (i8*)d->d_name, .len = strlen(d->d_name)};
+}
+
+static dynArray(dynArray(char)) paths = {.a = GlobalAllocator};
+static dynArray(char) curr_path = {.a = GlobalAllocator};
+static dynArray(char) out_path = {.a = GlobalAllocator};
+static DIR* curr = NULL;
+static u32 max_depth = 0;
+
+void DirBeginRec(SString filepath, u32 depth) {
+    ScratchArena sc = ScratchArenaGet(NULL);
+    char* file = SStringGetCstr(filepath, sc.arena);
+
+    curr = opendir(file);
+
+    if (curr) {
+        curr_path.size = 0;
+        dynExt(curr_path, filepath.data, filepath.len);
+        max_depth = depth;
+    }
+
+    ScratchArenaEnd(sc);
+}
+
+SString DirNextRec(DirType* t) {
+    struct dirent* d = NULL;
+    ScratchArena sc = ScratchArenaGet(NULL);
+
+    while (curr || paths.size) {
+        d = readdir(curr);
+
+        if (!d) {
+            closedir(curr);
+            dynFree(curr_path);
+            curr = NULL;
+            if (!paths.size)
+                break;
+
+            curr_path.data = dynBack(paths).data;
+            curr_path.size = dynBack(paths).size;
+            curr_path.cap = dynBack(paths).cap;
+            curr_path.a = dynBack(paths).a;
+            paths.size--;
+
+            char* pathname = SStringGetCstr(
+                (SString){.data = (i8*)curr_path.data, .len = curr_path.size},
+                sc.arena);
+            curr = opendir(pathname);
+            ScratchArenaEnd(sc);
+
+            continue;
+        }
+
+        if (strcmp(d->d_name, ".") == 0)
+            continue;
+        if (strcmp(d->d_name, "..") == 0)
+            continue;
+
+        switch (d->d_type) {
+        case DT_DIR:
+            *t = T_DIR;
+            dynArray(char) new = {.a = GlobalAllocator};
+            if (curr_path.data) {
+                dynExt(new, curr_path.data, curr_path.size);
+                dynPush(new, '/');
+            }
+            u32 len = strlen(d->d_name);
+            dynExt(new, d->d_name, len);
+            if (max_depth <= filepathdepth((SString){.data = (i8*)new.data,
+                                                     .len = new.size})) {
+                dynFree(new);
+                break;
+            }
+            dynResize(paths, paths.size + 1);
+            dynBack(paths).data = new.data;
+            dynBack(paths).size = new.size;
+            dynBack(paths).cap = new.cap;
+            dynBack(paths).a = new.a;
+            break;
+        case DT_REG:
+            *t = T_FILE;
+            break;
+        default:
+            *t = T_UNKNOWN;
+            break;
+        }
+        out_path.size = 0;
+        dynExt(out_path, curr_path.data, curr_path.size);
+        dynPush(out_path, '/');
+        u32 len = strlen(d->d_name);
+        dynExt(out_path, d->d_name, len);
+
+        return (SString){.data = (i8*)out_path.data, .len = out_path.size};
+    }
+
+    *t = T_END;
+    ScratchArenaEnd(sc);
+    return (SString){0};
+}
+
+/*
+    Math
+*/
+
+v2u v2uAdd(v2u a, v2u b) { return (v2u){a.x + b.x, a.y + b.y}; }
+v2i v2iAdd(v2i a, v2i b) { return (v2i){a.x + b.x, a.y + b.y}; }
+v2f v2fAdd(v2f a, v2f b) { return (v2f){a.x + b.x, a.y + b.y}; }
+v2d v2dAdd(v2d a, v2d b) { return (v2d){a.x + b.x, a.y + b.y}; }
+
+v2u v2uMul(v2u a, v2u b) { return (v2u){a.x * b.x, a.y * b.y}; }
+v2i v2iMul(v2i a, v2i b) { return (v2i){a.x * b.x, a.y * b.y}; }
+v2f v2fMul(v2f a, v2f b) { return (v2f){a.x * b.x, a.y * b.y}; }
+v2d v2dMul(v2d a, v2d b) { return (v2d){a.x * b.x, a.y * b.y}; }
+
+u64 FNVHash64(u8* data, u64 size) {
+    u64 hash = 0xcbf29ce484222325ULL;
+    for (u64 i = 0; i < size; i++) {
+        hash ^= data[i];
+        hash *= 0x100000001b3ULL;
+    }
+    return hash;
+}
+
+u32 FNVHash32(u8* data, u32 size) {
+    u32 hash = 2166136261UL;
+    for (u32 i = 0; i < size; i++) {
+        hash ^= data[i];
+        hash *= 16777619UL;
+    }
+    return hash;
+}
+
+u64 OATHash64(u8* data, u64 size) {
+    u64 h = 0;
+
+    for (u32 i = 0; i < size; i++) {
+        h += data[i];
+        h += h << 10;
+        h ^= h >> 6;
+    }
+
+    h += (h << 3);
+    h ^= h >> 11;
+    h += h << 15;
+
+    return h;
+}
+
+u32 OATHash32(u8* data, u32 size) {
+    u32 h = 0;
+
+    for (u32 i = 0; i < size; i++) {
+        h += data[i];
+        h += h << 10;
+        h ^= h >> 6;
+    }
+
+    h += (h << 3);
+    h ^= h >> 11;
+    h += h << 15;
+
+    return h;
+}
+
+#define mix(a, b, c)                                                           \
+    {                                                                          \
+        a -= b;                                                                \
+        a -= c;                                                                \
+        a ^= (c >> 13);                                                        \
+        b -= c;                                                                \
+        b -= a;                                                                \
+        b ^= (a << 8);                                                         \
+        c -= a;                                                                \
+        c -= b;                                                                \
+        c ^= (b >> 13);                                                        \
+        a -= b;                                                                \
+        a -= c;                                                                \
+        a ^= (c >> 12);                                                        \
+        b -= c;                                                                \
+        b -= a;                                                                \
+        b ^= (a << 16);                                                        \
+        c -= a;                                                                \
+        c -= b;                                                                \
+        c ^= (b >> 5);                                                         \
+        a -= b;                                                                \
+        a -= c;                                                                \
+        a ^= (c >> 3);                                                         \
+        b -= c;                                                                \
+        b -= a;                                                                \
+        b ^= (a << 10);                                                        \
+        c -= a;                                                                \
+        c -= b;                                                                \
+        c ^= (b >> 15);                                                        \
+    }
+
+u32 JENHash32(u8* data, u32 length) {
+    unsigned a, b;
+    u8* k = data;
+    unsigned c = 0;
+    unsigned len = length;
+
+    a = b = 0x9e3779b9;
+
+    while (len >= 12) {
+        a += (k[0] + ((unsigned)k[1] << 8) + ((unsigned)k[2] << 16) +
+              ((unsigned)k[3] << 24));
+        b += (k[4] + ((unsigned)k[5] << 8) + ((unsigned)k[6] << 16) +
+              ((unsigned)k[7] << 24));
+        c += (k[8] + ((unsigned)k[9] << 8) + ((unsigned)k[10] << 16) +
+              ((unsigned)k[11] << 24));
+
+        mix(a, b, c);
+
+        k += 12;
+        len -= 12;
+    }
+
+    c += length;
+
+    switch (len) {
+    case 11:
+        c += ((unsigned)k[10] << 24);
+    case 10:
+        c += ((unsigned)k[9] << 16);
+    case 9:
+        c += ((unsigned)k[8] << 8);
+    /* First byte of c reserved for length */
+    case 8:
+        b += ((unsigned)k[7] << 24);
+    case 7:
+        b += ((unsigned)k[6] << 16);
+    case 6:
+        b += ((unsigned)k[5] << 8);
+    case 5:
+        b += k[4];
+    case 4:
+        a += ((unsigned)k[3] << 24);
+    case 3:
+        a += ((unsigned)k[2] << 16);
+    case 2:
+        a += ((unsigned)k[1] << 8);
+    case 1:
+        a += k[0];
+    }
+
+    mix(a, b, c);
+
+    return c;
+}
+
+u64 JENHash64(u8* data, u64 length) {
+    u64 a, b;
+    u8* k = data;
+    u64 c = 0;
+    unsigned len = length;
+
+    a = b = 0x9e3779b9;
+
+    while (len >= 12) {
+        a += (k[0] + ((u64)k[1] << 8) + ((u64)k[2] << 16) + ((u64)k[3] << 24));
+        b += (k[4] + ((u64)k[5] << 8) + ((u64)k[6] << 16) + ((u64)k[7] << 24));
+        c +=
+            (k[8] + ((u64)k[9] << 8) + ((u64)k[10] << 16) + ((u64)k[11] << 24));
+
+        mix(a, b, c);
+
+        k += 12;
+        len -= 12;
+    }
+
+    c += length;
+
+    switch (len) {
+    case 11:
+        c += ((u64)k[10] << 24);
+    case 10:
+        c += ((u64)k[9] << 16);
+    case 9:
+        c += ((u64)k[8] << 8);
+    /* First byte of c reserved for length */
+    case 8:
+        b += ((u64)k[7] << 24);
+    case 7:
+        b += ((u64)k[6] << 16);
+    case 6:
+        b += ((u64)k[5] << 8);
+    case 5:
+        b += k[4];
+    case 4:
+        a += ((u64)k[3] << 24);
+    case 3:
+        a += ((u64)k[2] << 16);
+    case 2:
+        a += ((u64)k[1] << 8);
+    case 1:
+        a += k[0];
+    }
+
+    mix(a, b, c);
+
+    return c;
+}

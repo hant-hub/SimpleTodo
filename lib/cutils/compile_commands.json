@@ -1,0 +1,81 @@
+[
+{
+	"directory": "/home/eli/repos/SimpleTodo/lib/cutils",
+	"file": "./build/cutils.o",
+	"arguments": [ "-c" ,"-g" ,"src/cutils.c" ,"-lm" ,"-Iinclude/" ,"-Wall" ,"" ,"" ]
+},
+{
+	"directory": "/home/eli/repos/SimpleTodo/lib/cutils",
+	"file": "./build/tests/ga/ga3",
+	"arguments": [ "./test/tests/ga/ga3.c" ,"build/cutils.a" ,"-Iinclude/" ,"-Wall" ,"-g" ,"-lm" ,"" ,"" ]
+},
+{
+	"directory": "/home/eli/repos/SimpleTodo/lib/cutils",
+	"file": "./build/tests/core/file",
+	"arguments": [ "./test/tests/core/file.c" ,"build/cutils.a" ,"-Iinclude/" ,"-Wall" ,"-g" ,"-lm" ,"" ,"" ]
+},
+{
+	"directory": "/home/eli/repos/SimpleTodo/lib/cutils",
+	"file": "./build/tests/core/scratchArena",
+	"arguments": [ "./test/tests/core/scratchArena.c" ,"build/cutils.a" ,"-Iinclude/" ,"-Wall" ,"-g" ,"-lm" ,"" ,"" ]
+},
+{
+	"directory": "/home/eli/repos/SimpleTodo/lib/cutils",
+	"file": "./build/tests/core/alloc_block",
+	"arguments": [ "./test/tests/core/alloc_block.c" ,"build/cutils.a" ,"-Iinclude/" ,"-Wall" ,"-g" ,"-lm" ,"" ,"" ]
+},
+{
+	"directory": "/home/eli/repos/SimpleTodo/lib/cutils",
+	"file": "./build/tests/core/alloc_stack",
+	"arguments": [ "./test/tests/core/alloc_stack.c" ,"build/cutils.a" ,"-Iinclude/" ,"-Wall" ,"-g" ,"-lm" ,"" ,"" ]
+},
+{
+	"directory": "/home/eli/repos/SimpleTodo/lib/cutils",
+	"file": "./build/tests/core/string",
+	"arguments": [ "./test/tests/core/string.c" ,"build/cutils.a" ,"-Iinclude/" ,"-Wall" ,"-g" ,"-lm" ,"" ,"" ]
+},
+{
+	"directory": "/home/eli/repos/SimpleTodo/lib/cutils",
+	"file": "./build/tests/core/alloc_dynArena",
+	"arguments": [ "./test/tests/core/alloc_dynArena.c" ,"build/cutils.a" ,"-Iinclude/" ,"-Wall" ,"-g" ,"-lm" ,"" ,"" ]
+},
+{
+	"directory": "/home/eli/repos/SimpleTodo/lib/cutils",
+	"file": "./build/tests/core/array_slice",
+	"arguments": [ "./test/tests/core/array_slice.c" ,"build/cutils.a" ,"-Iinclude/" ,"-Wall" ,"-g" ,"-lm" ,"" ,"" ]
+},
+{
+	"directory": "/home/eli/repos/SimpleTodo/lib/cutils",
+	"file": "./build/tests/core/mutex",
+	"arguments": [ "./test/tests/core/mutex.c" ,"build/cutils.a" ,"-Iinclude/" ,"-Wall" ,"-g" ,"-lm" ,"" ,"" ]
+},
+{
+	"directory": "/home/eli/repos/SimpleTodo/lib/cutils",
+	"file": "./build/tests/core/time",
+	"arguments": [ "./test/tests/core/time.c" ,"build/cutils.a" ,"-Iinclude/" ,"-Wall" ,"-g" ,"-lm" ,"" ,"" ]
+},
+{
+	"directory": "/home/eli/repos/SimpleTodo/lib/cutils",
+	"file": "./build/tests/core/print",
+	"arguments": [ "./test/tests/core/print.c" ,"build/cutils.a" ,"-Iinclude/" ,"-Wall" ,"-g" ,"-lm" ,"" ,"" ]
+},
+{
+	"directory": "/home/eli/repos/SimpleTodo/lib/cutils",
+	"file": "./build/tests/core/rwlock",
+	"arguments": [ "./test/tests/core/rwlock.c" ,"build/cutils.a" ,"-Iinclude/" ,"-Wall" ,"-g" ,"-lm" ,"" ,"" ]
+},
+{
+	"directory": "/home/eli/repos/SimpleTodo/lib/cutils",
+	"file": "./build/tests/core/alloc_global",
+	"arguments": [ "./test/tests/core/alloc_global.c" ,"build/cutils.a" ,"-Iinclude/" ,"-Wall" ,"-g" ,"-lm" ,"" ,"" ]
+},
+{
+	"directory": "/home/eli/repos/SimpleTodo/lib/cutils",
+	"file": "./build/tests/core/semaphore",
+	"arguments": [ "./test/tests/core/semaphore.c" ,"build/cutils.a" ,"-Iinclude/" ,"-Wall" ,"-g" ,"-lm" ,"" ,"" ]
+},
+{
+	"directory": "/home/eli/repos/SimpleTodo/lib/cutils",
+	"file": "./build/tests/core/parse",
+	"arguments": [ "./test/tests/core/parse.c" ,"build/cutils.a" ,"-Iinclude/" ,"-Wall" ,"-g" ,"-lm" ,"" ,"" ]
+}
