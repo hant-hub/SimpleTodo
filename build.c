@@ -16,16 +16,14 @@ int main(int argc, char* argv[]) {
         if (!filestat(sstring("build")).stats.size) {
             Task* mkdir = AddTask(&g, "Make Build Dir");
             //AddCmd(mkdir, "mkdir", "build/");
-            AddCmd(mkdir, "mkdir", "-p", "build/tests");
+            AddCmd(mkdir, "mkdir", "-p", "./build/tests");
             top = mkdir;
         }
 
         file f = filestat(sstring("./lib/cutils"));
-        if (!f.stats.size) {
-            Task* pull = AddTask(&g, "pull cutils");
-            AddCmd(pull, "git", "clone", "git@eliserver:Cutils.git", "lib/cutils");
-
-            Task* compile_build = AddTask(&g, "Make Build Script", pull);
+        if (f.stats.size) {
+            printlog("Build sb\n");
+            Task* compile_build = AddTask(&g, "Make Build Script", top);
             AddCmd(compile_build, "cc", "lib/cutils/build.c", "-o", "lib/cutils/sb");
 
             top = compile_build;
