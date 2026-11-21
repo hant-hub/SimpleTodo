@@ -20,28 +20,6 @@ int main(int argc, char* argv[]) {
             top = mkdir;
         }
 
-        file f = filestat(sstring("./lib/cutils"));
-        if (f.stats.size) {
-            printlog("Build sb\n");
-            Task* compile_build = AddTask(&g, "Make Build Script", top);
-            AddCmd(compile_build, "cc", "lib/cutils/build.c", "-o", "lib/cutils/sb");
-
-            top = compile_build;
-
-        }
-        
-        time_spec lib = filestat(sstring("build/cutils.a")).stats.modified;
-        time_spec src = filestat(sstring("lib/cutils")).stats.modified;
-        if (timecmp(lib, <=, src)) {
-            Task* run_build = AddTask(&g, "build cutils", top);
-            AddCmd(run_build, "./lib/cutils/sb", "no-test");
-
-            Task* copy_lib = AddTask(&g, "copy cutils lib", run_build);
-            AddCmd(copy_lib, "cp", "./lib/cutils/build/cutils.a", "./build");
-
-            top = copy_lib;
-        }
-
         AddDep(pre_compile, top);
     }
 
@@ -52,14 +30,14 @@ int main(int argc, char* argv[]) {
     //so sqlite3 isn't fully available when ar starts
     Task* pre_lib = AddDummyTask(&g);
     {
-        Task* sqlite = CompileCmd(&g, "build/sqlite3.o", Spread("-c", "src/sqlite3.c", "-Ilib/cutils/include", "-Iinclude/"), pre_compile);
-        Task* core = CompileCmd(&g, "build/core.o", Spread("-c", "src/core.c", "-Ilib/cutils/include", "-Iinclude/"), pre_compile);
+        Task* sqlite = CompileCmd(&g, "build/sqlite3.o", Spread("-c", "src/sqlite3.c", "-Iinclude/"), pre_compile);
+        Task* core = CompileCmd(&g, "build/core.o", Spread("-c", "src/core.c", "-Iinclude/"), pre_compile);
         AddDep(pre_lib, sqlite);
         AddDep(pre_lib, core);
     }
     {
-        Task* sqlite = CompileCmd(&g, "build/sqlite3_debug.o", Spread("-DDEBUG", "-g", "-c", "src/sqlite3.c", "-Ilib/cutils/include", "-Iinclude/"), pre_compile);
-        Task* core = CompileCmd(&g, "build/core_debug.o", Spread("-DDEBUG", "-g", "-c", "src/core.c", "-Ilib/cutils/include", "-Iinclude/", "-Wall"), pre_compile);
+        Task* sqlite = CompileCmd(&g, "build/sqlite3_debug.o", Spread("-DDEBUG", "-g", "-c", "src/sqlite3.c", "-Iinclude/"), pre_compile);
+        Task* core = CompileCmd(&g, "build/core_debug.o", Spread("-DDEBUG", "-g", "-c", "src/core.c", "-Iinclude/", "-Wall"), pre_compile);
         AddDep(pre_lib, sqlite);
         AddDep(pre_lib, core);
     }
@@ -75,18 +53,18 @@ int main(int argc, char* argv[]) {
 
     
     //build app
-    Task* app = CompileCmd(&g, "build/app", Spread("-g", "src/main.c", "build/st_debug.a", "build/cutils.a",
-                "-Ilib/cutils/include", "-Iinclude/"), debug_lib);
+    Task* app = CompileCmd(&g, "build/app", Spread("-g", "src/main.c", "build/st_debug.a", "-lcutils",
+                "-Iinclude/"), debug_lib);
 
     Task* build_tests = AddDummyTask(&g);
     ScratchArena sc = ScratchArenaGet(NULL);
 
     //build stls
-    Task* stls = CompileCmd(&g, "build/stls", Spread("src/stls.c", "build/st.a", "build/cutils.a",
-                "-Ilib/cutils/include", "-Iinclude/", "-Wall"), lib);
+    Task* stls = CompileCmd(&g, "build/stls", Spread("src/stls.c", "build/st.a", "-lcutils",
+                "-Iinclude/", "-Wall"), lib);
 
-    Task* stedit = CompileCmd(&g, "build/stedit", Spread("src/stedit.c", "build/st.a", "build/cutils.a",
-                "-Ilib/cutils/include", "-Iinclude/", "-Wall"), lib);
+    Task* stedit = CompileCmd(&g, "build/stedit", Spread("src/stedit.c", "build/st.a", "-lcutils",
+                "-Iinclude/", "-Wall"), lib);
 
 
 
@@ -126,7 +104,7 @@ int main(int argc, char* argv[]) {
         if (timecmp(s_file.stats.modified, >=, o_file.stats.modified) ||
             timecmp(c_file.stats.modified, >=, o_file.stats.modified)) {
             Task* t = CompileCmd(&g, (char*)output.data,
-                    Spread((char*)src.data, "-g", "-DDEBUG", "build/st_debug.a", "build/cutils.a", "-Ilib/cutils/include", "-Iinclude/", "-Wall"),
+                    Spread((char*)src.data, "-g", "-DDEBUG", "build/st_debug.a", "-lcutils", "-Iinclude/", "-Wall"),
                     debug_lib);
             AddDep(build_tests, t);
         }

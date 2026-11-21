@@ -1,9 +1,11 @@
-{ pkgs ? import <nixpkgs> {} }:
+{ pkgs ? import <nixpkgs> {}, cutils}:
 
 pkgs.stdenv.mkDerivation {
   pname = "simple-todo";
   version = "1.0.0";
   src = ./.;
+
+  buildInputs = [ cutils ];
 
   buildCommand = ''
     cd /tmp

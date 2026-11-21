@@ -792,7 +792,7 @@ u64 AddTodo(TodoCtx* ctx, SString name, SString body, f32 priority, u32 completi
     SQL_CALL(sqlite3_bind_int64(statement, 4, completion));
 
     int rc;
-    i64 id;
+    i64 id = 0;
     while (1) {
         rc = sqlite3_step(statement);
         if (rc == SQLITE_ROW) {
