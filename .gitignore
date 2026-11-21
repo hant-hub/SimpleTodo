@@ -1,5 +1,6 @@
 /*
-!/lib
+!default.nix
+!flake.*
 !/.gitignore
 !/src
 !/test

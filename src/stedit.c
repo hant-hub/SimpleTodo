@@ -71,7 +71,7 @@ void singleEdit(SA args) {
     printlog("Data:\n%s\n", data);
 
     char* err;
-    Todo todo = DeStringifyTodo(&ctx, data, ArenaGetAllocator(sc.arena), &err);
+    DeStringifyTodo(&ctx, data, ArenaGetAllocator(sc.arena), &err);
 
     if (err) {
         printlog("Error: %n\n", err);
@@ -86,7 +86,7 @@ void singleEdit(SA args) {
 void multiEdit(SA args) {
     TodoCtx ctx = InitDataBase(sstring(""));
     ScratchArena sc = ScratchArenaGet(NULL);
-    Allocator scratch = ArenaGetAllocator(sc.arena);
+    ArenaGetAllocator(sc.arena);
 
     if (args.flags.b.p) {}
 

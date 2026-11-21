@@ -679,7 +679,6 @@ SString default_config = sstring("db_loc: ~/.local/share/simpletodo/database");
 
 TodoCtx InitDataBase(SString overrides) {
     TodoCtx out = { };
-    char* err;
 
     out.mem = ArenaCreate(GlobalAllocator, KB(10));
     out.tag_ids.a = ArenaGetAllocator(out.mem);

@@ -59,7 +59,7 @@ int main(int argc, char* argv[]) {
     }
     {
         Task* sqlite = CompileCmd(&g, "build/sqlite3_debug.o", Spread("-DDEBUG", "-g", "-c", "src/sqlite3.c", "-Ilib/cutils/include", "-Iinclude/"), pre_compile);
-        Task* core = CompileCmd(&g, "build/core_debug.o", Spread("-DDEBUG", "-g", "-c", "src/core.c", "-Ilib/cutils/include", "-Iinclude/"), pre_compile);
+        Task* core = CompileCmd(&g, "build/core_debug.o", Spread("-DDEBUG", "-g", "-c", "src/core.c", "-Ilib/cutils/include", "-Iinclude/", "-Wall"), pre_compile);
         AddDep(pre_lib, sqlite);
         AddDep(pre_lib, core);
     }
@@ -83,10 +83,10 @@ int main(int argc, char* argv[]) {
 
     //build stls
     Task* stls = CompileCmd(&g, "build/stls", Spread("src/stls.c", "build/st.a", "build/cutils.a",
-                "-Ilib/cutils/include", "-Iinclude/"), lib);
+                "-Ilib/cutils/include", "-Iinclude/", "-Wall"), lib);
 
     Task* stedit = CompileCmd(&g, "build/stedit", Spread("src/stedit.c", "build/st.a", "build/cutils.a",
-                "-Ilib/cutils/include", "-Iinclude/"), lib);
+                "-Ilib/cutils/include", "-Iinclude/", "-Wall"), lib);
 
 
 
@@ -126,7 +126,7 @@ int main(int argc, char* argv[]) {
         if (timecmp(s_file.stats.modified, >=, o_file.stats.modified) ||
             timecmp(c_file.stats.modified, >=, o_file.stats.modified)) {
             Task* t = CompileCmd(&g, (char*)output.data,
-                    Spread((char*)src.data, "-g", "-DDEBUG", "build/st_debug.a", "build/cutils.a", "-Ilib/cutils/include", "-Iinclude/"),
+                    Spread((char*)src.data, "-g", "-DDEBUG", "build/st_debug.a", "build/cutils.a", "-Ilib/cutils/include", "-Iinclude/", "-Wall"),
                     debug_lib);
             AddDep(build_tests, t);
         }

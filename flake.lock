@@ -1,0 +1,62 @@
+{
+  "nodes": {
+    "cutils": {
+      "inputs": {
+        "nixpkgs": "nixpkgs"
+      },
+      "locked": {
+        "lastModified": 1795224225,
+        "narHash": "sha256-1fCO/D8jZJxOi5GvZbBrWasa2f2g6aP4uyBNe+0QAgI=",
+        "owner": "hant-hub",
+        "repo": "Cutils",
+        "rev": "cc12e8f514c92579588041187ea837da0f6862e0",
+        "type": "github"
+      },
+      "original": {
+        "owner": "hant-hub",
+        "repo": "Cutils",
+        "type": "github"
+      }
+    },
+    "nixpkgs": {
+      "locked": {
+        "lastModified": 1795155813,
+        "narHash": "sha256-9dFqyDnQ8fKpkdv5pha+S7qR1HXIiJ8Ndkv+CXDzJu8=",
+        "owner": "nixos",
+        "repo": "nixpkgs",
+        "rev": "b758f1622588b4d5ce019971748a68be80e5943c",
+        "type": "github"
+      },
+      "original": {
+        "owner": "nixos",
+        "ref": "nixpkgs-unstable",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "nixpkgs_2": {
+      "locked": {
+        "lastModified": 1795155813,
+        "narHash": "sha256-9dFqyDnQ8fKpkdv5pha+S7qR1HXIiJ8Ndkv+CXDzJu8=",
+        "owner": "nixos",
+        "repo": "nixpkgs",
+        "rev": "b758f1622588b4d5ce019971748a68be80e5943c",
+        "type": "github"
+      },
+      "original": {
+        "owner": "nixos",
+        "ref": "nixpkgs-unstable",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "root": {
+      "inputs": {
+        "cutils": "cutils",
+        "nixpkgs": "nixpkgs_2"
+      }
+    }
+  },
+  "root": "root",
+  "version": 7
+}
