@@ -675,13 +675,24 @@ static void InitializeTables(sqlite3* db) {
     }
 }
 
-SString default_config = sstring("db_loc: ~/.local/share/simpletodo/database");
+#include <stdlib.h>
+
+char* default_config_format = "db_loc: %n/.local/share/simpletodo/database";
 
 TodoCtx InitDataBase(SString overrides) {
     TodoCtx out = { };
 
     out.mem = ArenaCreate(GlobalAllocator, KB(10));
     out.tag_ids.a = ArenaGetAllocator(out.mem);
+
+    char* name = getenv("HOME");
+
+    SString default_config = (SString) {
+        .data = ArenaAlloc(out.mem, strlen(default_config_format) + strlen(name)),
+        .len = strlen(default_config_format) + strlen(name) 
+    };
+
+    default_config.len = sformat(default_config, default_config_format, name);
 
     ConfigMap config = { .a = GlobalAllocator };
     ParseConfig(&config, overrides);
