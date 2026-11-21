@@ -116,6 +116,16 @@ can be used to search which tags exist.
 >       -o, --offset: int               Ignore the first offset items. If this is set and limit is not, limit is set to 1000.
 
 These can be found in the help page as well.
+
+## Installation
+
+Currently there are 2 options for installation.
+First you can build the library and manually install into a directory
+such as `/opt/bin/`.
+
+The second option is to use this repo as a nix flake.
+This can be installed in the usual way nix flakes are installed
+
 ## Configuration
 
 All simpletodo tools can be configured via a `.todo.conf` file.
@@ -125,3 +135,4 @@ adding `.todo.conf` files as they are found.
 This means you can have local configurations which override the default
 values for things like database location, or adding required tags which
 will be automatically applied to todos.
+
